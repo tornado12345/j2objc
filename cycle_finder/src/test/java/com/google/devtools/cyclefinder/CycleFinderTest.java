@@ -15,19 +15,16 @@
 package com.google.devtools.cyclefinder;
 
 import com.google.common.base.Joiner;
-import com.google.common.collect.Lists;
 import com.google.common.io.Files;
 import com.google.devtools.j2objc.util.ErrorUtil;
-import com.google.devtools.j2objc.util.SourceVersion;
-
-import junit.framework.TestCase;
-
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.List;
+import junit.framework.TestCase;
 
 /**
  * System tests for the CycleFinder tool.
@@ -41,28 +38,22 @@ public class CycleFinderTest extends TestCase {
   List<List<Edge>> cycles;
   List<String> whitelistEntries;
   List<String> blacklistEntries;
+  boolean printReferenceGraph;
+  ReferenceGraph referenceGraph;
 
   static {
     // Prevents errors and warnings from being printed to the console.
     ErrorUtil.setTestMode();
   }
 
-  private boolean isRunningJava8() {
-    try {
-      Class.forName("java.lang.invoke.LambdaMetafactory");
-      return true;
-    } catch (ClassNotFoundException e) {
-      // Running on pre-Java 8 JRE.
-      return false;
-    }
-  }
-
   @Override
   protected void setUp() throws IOException {
     tempDir = createTempDir();
-    inputFiles = Lists.newArrayList();
-    whitelistEntries = Lists.newArrayList();
-    blacklistEntries = Lists.newArrayList();
+    inputFiles = new ArrayList<>();
+    whitelistEntries = new ArrayList<>();
+    blacklistEntries = new ArrayList<>();
+    printReferenceGraph = false;
+    referenceGraph = null;
   }
 
   @Override
@@ -77,34 +68,28 @@ public class CycleFinderTest extends TestCase {
     assertCycle("LA;", "LB;");
   }
 
-  // TODO(user): Use com.google.j2objc.annotations.WeakOuter when transitioned to Java 8
+  // TODO(nbraswell): Use com.google.j2objc.annotations.WeakOuter when transitioned to Java 8
   private static String weakOuterAndInterface = "import java.lang.annotation.*;\n"
         + "@Target(ElementType.TYPE_USE) @interface WeakOuter {}"
         + "interface Simple { public int run(); }";
 
   public void testAnonymousClassOuterRefCycle() throws Exception {
-    if (!isRunningJava8()) {
-      return;
-    }
     addSourceFile("Simple.java", weakOuterAndInterface
         + "class Test { int member = 7; Simple o;"
         + "void f() { o = new Simple() { public int run() { return member; } }; } }");
-    findCycles(true);
+    findCycles();
 
-    // Assert that we have one cycle that contains LSimple~Test and a LSimple~Test anonymous class.
+    // Assert that we have one cycle that contains LTest and a LTest anonymous class.
     assertEquals(1, cycles.size());
-    assertCycle("LSimple~Test;");
-    assertContains("LSimple~Test$", printCyclesToString());
+    assertCycle("LTest;");
+    assertContains("LTest.1", printCyclesToString());
   }
 
   public void testAnonymousClassWithWeakOuter() throws Exception {
-    if (!isRunningJava8()) {
-      return;
-    }
     addSourceFile("Simple.java", weakOuterAndInterface
         + "class Test { int member = 7; Simple o;"
         + "void f() { new @WeakOuter Simple() { public int run() { return member; } }; } }");
-    findCycles(true);
+    findCycles();
     assertNoCycles();
   }
 
@@ -112,7 +97,7 @@ public class CycleFinderTest extends TestCase {
     String source = "import com.google.j2objc.annotations.WeakOuter; "
         + "public class A { @WeakOuter class B { int test() { return o.hashCode(); }} B o; }";
     addSourceFile("A.java", source);
-    findCycles(true);
+    findCycles();
     assertNoCycles();
   }
 
@@ -120,8 +105,8 @@ public class CycleFinderTest extends TestCase {
     String source = "import com.google.j2objc.annotations.WeakOuter; "
         + "public class A { class B {int test(){return o.hashCode();}} B o;}";
     addSourceFile("A.java", source);
-    findCycles(true);
-    assertCycle("LA;", "LA$B;");
+    findCycles();
+    assertCycle("LA;", "LA.B;");
   }
 
   public void testWeakField() throws Exception {
@@ -139,9 +124,10 @@ public class CycleFinderTest extends TestCase {
     assertNoCycles();
   }
 
-  public void testRecursiveWildcard() throws Exception {
+  public void testRecursiveTypeVariable() throws Exception {
     addSourceFile("A.java", "class A<T> { A<? extends T> a; }");
     addSourceFile("B.java", "class B<T> { B<? extends B<T>> b; }");
+    addSourceFile("C.java", "class C<T> { C<java.util.List<T>> c; }");
     findCycles();
     // This test passes if it doesn't hang or crash due to infinite recursion.
   }
@@ -151,7 +137,7 @@ public class CycleFinderTest extends TestCase {
     addSourceFile("B.java", "class B<T> { T t; }");
     addSourceFile("C.java", "class C { A a; }");
     findCycles();
-    assertCycle("LA;", "LB<LB;{0}+LC;>;", "LB;{0}+LC;");
+    assertCycle("LA;", "LB<+LC;>;", "+LC;");
   }
 
   public void testWhitelistedField() throws Exception {
@@ -330,8 +316,10 @@ public class CycleFinderTest extends TestCase {
   }
 
   public void testOuterReferenceToGenericClass() throws Exception {
-    addSourceFile("A.java", "class A<T> { int i; T t; class C { void test() { i++; } } }");
+    // B.java is added before A.java to test that the outer edge A<B>.C -> A<B> is still added
+    // despite B being visited before A. The outer reference cannot be known until A is visited.
     addSourceFile("B.java", "class B { A<B>.C abc; }");
+    addSourceFile("A.java", "class A<T> { int i; T t; class C { void test() { i++; } } }");
     findCycles();
     assertCycle("LA<LB;>;", "LB;", "LA<LB;>.C;");
   }
@@ -388,15 +376,29 @@ public class CycleFinderTest extends TestCase {
   }
 
   public void testSimpleLambdaWithCycle() throws Exception {
-    if (!isRunningJava8()) {
-      return;
-    }
     addSourceFile("I.java", "interface I { int foo(); }");
     addSourceFile("A.java", "class A { int j = 1; I i = () -> j; }");
-    findCycles(true);
-    // TODO(kstanger): Right now this makes sure that cycle_finder doesn't crash on lambdas, but it
-    // should be finding a cycle here.
-    assertNoCycles();
+    findCycles();
+    assertCycle("LA.$Lambda$1;", "LA;");
+  }
+
+  public void testMethodReferenceCycle() throws Exception {
+    addSourceFile("I.java", "interface I { int foo(); }");
+    addSourceFile("A.java", "class A { int bar() { return 1; } I i = this::bar; }");
+    findCycles();
+    assertCycle("LA.$Lambda$1;", "LA;");
+  }
+
+  public void testPrintReferenceGraph() throws Exception {
+    addSourceFile("A.java", "class A { B<? extends C> b; }");
+    addSourceFile("B.java", "class B<T> { T t; }");
+    addSourceFile("C.java", "class C { A a; }");
+    printReferenceGraph = true;
+    findCycles();
+    String graph = printReferenceGraphToString();
+    assertContains("class: LB<+LC;>;", graph);
+    assertContains("A -> (field b with type B<? extends C>)", graph);
+    assertContains("C -> (field a with type A)", graph);
   }
 
   private void assertContains(String substr, String str) {
@@ -411,9 +413,9 @@ public class CycleFinderTest extends TestCase {
   private void assertCycle(String... types) {
     assertNotNull(cycles);
     outer: for (List<Edge> cycle : cycles) {
-      List<String> cycleTypes = Lists.newArrayList();
+      List<String> cycleTypes = new ArrayList<>();
       for (Edge e : cycle) {
-        cycleTypes.add(e.getOrigin().getKey());
+        cycleTypes.add(e.getOrigin().getSignature());
       }
       for (String type : types) {
         if (!cycleTypes.contains(type)) {
@@ -432,15 +434,14 @@ public class CycleFinderTest extends TestCase {
     return cyclesOut.toString();
   }
 
-  private void findCycles() throws IOException {
-      findCycles(false);
+  private String printReferenceGraphToString() {
+    ByteArrayOutputStream referenceGraphOut = new ByteArrayOutputStream();
+    referenceGraph.print(new PrintStream(referenceGraphOut));
+    return referenceGraphOut.toString();
   }
 
-  private void findCycles(boolean useJava8) throws IOException {
+  private void findCycles() throws IOException {
     Options options = new Options();
-    if (useJava8) {
-      options.setSourceVersion(SourceVersion.JAVA_8);
-    }
     if (!whitelistEntries.isEmpty()) {
       File whitelistFile = new File(tempDir, "whitelist");
       Files.write(Joiner.on("\n").join(whitelistEntries), whitelistFile, Charset.defaultCharset());
@@ -453,8 +454,15 @@ public class CycleFinderTest extends TestCase {
     }
     options.setSourceFiles(inputFiles);
     options.setClasspath(System.getProperty("java.class.path"));
+    if (printReferenceGraph) {
+      options.setPrintReferenceGraph();
+    }
     CycleFinder finder = new CycleFinder(options);
+    finder.constructGraph();
     cycles = finder.findCycles();
+    if (printReferenceGraph) {
+      referenceGraph = finder.getReferenceGraph();
+    }
     if (ErrorUtil.errorCount() > 0) {
       fail("CycleFinder failed with errors:\n"
            + Joiner.on("\n").join(ErrorUtil.getErrorMessages()));

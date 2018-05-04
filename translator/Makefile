@@ -35,13 +35,14 @@ SOURCEPATH = $(CWD):$(JAVA_SOURCE_DIR)
 BASE_PACKAGE = com/google/devtools/j2objc
 
 DIST_DEPS = $(JSR305_JAR) j2objc_annotations.jar
-INTERNAL_DEPS = $(ECLIPSE_JARS) $(GUAVA_JAR) $(ASM_JAR) $(JSR305_JAR) $(JAVAC_JAR)
+INTERNAL_DEPS = $(GUAVA_JAR) $(JSR305_JAR) $(JAVAC_JAR) $(PROCYON_JARS)
 JAR_DEPS_DIST = $(DIST_DEPS:%=$(DIST_JAR_DIR)/%) $(INTERNAL_DEPS:%=$(JAVA_DEPS_JAR_DIR)/%)
 JAR_DEPS_PATH = $(subst $(eval) ,:,$(strip $(JAR_DEPS_DIST)))
 JUNIT_JAR_DIST = $(DIST_JAR_DIR)/$(JUNIT_JAR)
 
 CLASSPATH = $(CLASS_DIR):$(JAR_DEPS_PATH)
 TEST_CLASSPATH = $(TEST_DIR):$(CLASS_DIR):$(JAR_DEPS_PATH):$(JUNIT_JAR_DIST)
+TEST_BOOT_CLASSPATH = $(DIST_JAR_DIR)/jre_emul.jar
 
 MAIN_CLASS = com.google.devtools.j2objc.J2ObjC
 MANIFEST = $(BUILD_DIR)/manifest.mf
@@ -58,7 +59,6 @@ JAVA_SOURCES = \
 	ast/Annotation.java \
 	ast/AnnotationTypeDeclaration.java \
 	ast/AnnotationTypeMemberDeclaration.java \
-	ast/AnonymousClassDeclaration.java \
 	ast/ArrayAccess.java \
 	ast/ArrayCreation.java \
 	ast/ArrayInitializer.java \
@@ -79,7 +79,6 @@ JAVA_SOURCES = \
 	ast/ClassInstanceCreation.java \
 	ast/CommaExpression.java \
 	ast/Comment.java \
-	ast/CommonTypeDeclaration.java \
 	ast/CompilationUnit.java \
 	ast/ConditionalExpression.java \
 	ast/ConstructorInvocation.java \
@@ -134,6 +133,7 @@ JAVA_SOURCES = \
 	ast/QualifiedName.java \
 	ast/QualifiedType.java \
 	ast/ReturnStatement.java \
+	ast/SignatureASTPrinter.java \
 	ast/SimpleName.java \
 	ast/SimpleType.java \
 	ast/SingleMemberAnnotation.java \
@@ -154,7 +154,7 @@ JAVA_SOURCES = \
 	ast/TreeNode.java \
 	ast/TreeUtil.java \
 	ast/TreeVisitor.java \
-	ast/TreeVisitorAssertionError.java \
+	ast/TreeVisitorError.java \
 	ast/TryStatement.java \
 	ast/Type.java \
 	ast/TypeDeclaration.java \
@@ -187,63 +187,28 @@ JAVA_SOURCES = \
 	gen/TypeGenerator.java \
 	gen/TypeImplementationGenerator.java \
 	gen/TypePrivateDeclarationGenerator.java \
+	javac/ClassFileConverter.java \
 	javac/JavacEnvironment.java \
+	javac/JavacJ2ObjCIncompatibleStripper.java \
 	javac/JavacParser.java \
+	javac/MemoryFileObject.java \
 	javac/TreeConverter.java \
-	jdt/BindingConverter.java \
-	jdt/JdtAnnotationBinding.java \
-	jdt/JdtAnnotationMirror.java \
-	jdt/JdtAnnotationValue.java \
-	jdt/JdtArrayType.java \
-	jdt/JdtBinding.java \
-	jdt/JdtDeclaredType.java \
-	jdt/JdtElement.java \
-	jdt/JdtElements.java \
-	jdt/JdtExecutableElement.java \
-	jdt/JdtExecutableType.java \
-	jdt/JdtExtendedModifier.java \
-	jdt/JdtIntersectionType.java \
-	jdt/JdtMemberValuePairBinding.java \
-	jdt/JdtMethodBinding.java \
-	jdt/JdtNoType.java \
-	jdt/JdtNativeType.java \
-	jdt/JdtNullType.java \
-	jdt/JdtPackageBinding.java \
-	jdt/JdtPackageElement.java \
-	jdt/JdtParser.java \
-	jdt/JdtPrimitiveType.java \
-	jdt/JdtTypeBinding.java \
-	jdt/JdtTypeElement.java \
-	jdt/JdtTypeMirror.java \
-	jdt/JdtTypeParameterElement.java \
-	jdt/JdtTypes.java \
-	jdt/JdtTypeVariable.java \
-	jdt/JdtVariableBinding.java \
-	jdt/JdtVariableElement.java \
-	jdt/JdtWildcardType.java \
-	jdt/StringName.java \
-	jdt/TreeConverter.java \
-	pipeline/AnnotationPreProcessor.java \
 	pipeline/BuildClosureQueue.java \
 	pipeline/FileProcessor.java \
 	pipeline/GenerationBatch.java \
 	pipeline/InputFilePreprocessor.java \
-	pipeline/J2ObjCIncompatibleStripper.java \
 	pipeline/ProcessingContext.java \
 	pipeline/TranslationProcessor.java \
 	translate/AbstractMethodRewriter.java \
 	translate/AnnotationRewriter.java \
-	translate/AnonymousClassConverter.java \
 	translate/ArrayRewriter.java \
 	translate/Autoboxer.java \
 	translate/CastResolver.java \
 	translate/ComplexExpressionExtractor.java \
 	translate/ConstantBranchPruner.java \
 	translate/DeadCodeEliminator.java \
-	translate/DefaultConstructorAdder.java \
 	translate/DefaultMethodShimGenerator.java \
 	translate/DestructorGenerator.java \
-	translate/ElementReferenceMapper.java \
 	translate/EnhancedForRewriter.java \
 	translate/EnumRewriter.java \
 	translate/Functionizer.java \
@@ -269,30 +234,22 @@ JAVA_SOURCES = \
 	translate/UnsequencedExpressionRewriter.java \
 	translate/VarargsRewriter.java \
 	translate/VariableRenamer.java \
-	types/AbstractTypeBinding.java \
+	types/AbstractTypeMirror.java \
 	types/ExecutablePair.java \
 	types/FunctionElement.java \
+	types/GeneratedAnnotationMirror.java \
+	types/GeneratedArrayType.java \
 	types/GeneratedElement.java \
 	types/GeneratedExecutableElement.java \
-	types/GeneratedMethodBinding.java \
-	types/GeneratedPackageBinding.java \
 	types/GeneratedPackageElement.java \
-	types/GeneratedTypeBinding.java \
 	types/GeneratedTypeElement.java \
-	types/GeneratedVariableBinding.java \
 	types/GeneratedVariableElement.java \
 	types/HeaderImportCollector.java \
-	types/IOSMethodBinding.java \
-	types/IOSTypeBinding.java \
 	types/ImplementationImportCollector.java \
 	types/Import.java \
 	types/LambdaTypeElement.java \
 	types/NativeType.java \
-	types/NativeTypeBinding.java \
 	types/PointerType.java \
-	types/PointerTypeBinding.java \
-	types/Types.java \
-	util/BindingUtil.java \
 	util/CaptureInfo.java \
 	util/CodeReferenceMap.java \
 	util/ElementUtil.java \
@@ -314,7 +271,7 @@ JAVA_SOURCES = \
 	util/UnicodeUtils.java \
 	util/Version.java
 
-RESOURCES = J2ObjC.properties JRE.mappings
+RESOURCES = J2ObjC.properties JRE.mappings reserved_names.txt
 RESOURCE_DIR = $(SOURCE_DIR)/resources
 TEST_RESOURCES_DIR = $(TEST_SOURCE_DIR)/resources
 
@@ -325,7 +282,9 @@ TEST_RESOURCES = \
   com/google/devtools/j2objc/mappings.j2objc \
   com/google/devtools/j2objc/testMappings.j2objc \
   com/google/devtools/j2objc/annotations/Processor.jar \
-  com/google/devtools/j2objc/util/example.jar
+  com/google/devtools/j2objc/util/example.jar \
+  com/google/devtools/j2objc/util/hello.aar \
+  com/google/devtools/j2objc/util/packageInfoLookupTest.jar
 TEST_RESOURCE_FILES = $(TEST_RESOURCES:%=$(TEST_DIR)/%)
 
 # Files in dependent jars that aren't needed in combined jar.
@@ -337,6 +296,11 @@ UNUSED_JAR_CONTENTS = \
   $(CLASS_DIR)/compiler* \
   $(CLASS_DIR)/hook* \
   $(CLASS_DIR)/jdt*
+ifeq ($(shell uname), Linux)
+PRUNE_CMD = bash -O globasciiranges -c "rm -rf $(UNUSED_JAR_CONTENTS)"
+else
+PRUNE_CMD = rm -rf $(UNUSED_JAR_CONTENTS)
+endif
 
 default: $(J2OBJC_JAR)
 	@: # suppress make's "nothing to be done" message
@@ -344,13 +308,13 @@ default: $(J2OBJC_JAR)
 $(J2OBJC_JAR): $(MANIFEST) $(RESOURCE_FILES) $(JAVA_SOURCES_FULL) \
   | $(BUILD_DIR) java_deps_dist annotations_dist
 	@echo building j2objc jar
-	@javac -Xlint:unchecked -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) \
+	@$(JAVAC) -Xlint:unchecked -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) \
 	    -d $(CLASS_DIR) -encoding UTF-8 -source 1.8 -target 1.8 -nowarn \
 	    $(JAVA_SOURCES_FULL)
 	@for lib in $(JAR_DEPS_DIST); do unzip -oq $$lib -d $(CLASS_DIR); done
-	@rm -rf $(UNUSED_JAR_CONTENTS)
+	@$(PRUNE_CMD)
 	@jar cfm $@-combined $(MANIFEST) -C $(CLASS_DIR) .
-	@java -jar $(JAVA_DEPS_JAR_DIR)/$(JARJAR_JAR) process jarjar.rules $@-combined $@
+	@$(JAVA) -jar $(JAVA_DEPS_JAR_DIR)/$(JARJAR_JAR) process jarjar.rules $@-combined $@
 
 # Format manifest classpath with each jar on a separate line, to avoid
 # maximum line length of 72 bytes in UTF-8 encoding.
@@ -383,11 +347,13 @@ clean:
 	@rm -rf $(BUILD_DIR) $(J2OBJC_JAR_DIST) $(J2OBJC_SH_DIST)
 
 test: compile-tests copy-test-resources
-	java -classpath $(TEST_CLASSPATH) -ea junit.textui.TestRunner com.google.devtools.j2objc.SmallTests
+	$(JAVA) -classpath $(TEST_CLASSPATH) -Xss4m -XX:+UseParallelGC \
+	    -Xbootclasspath/a:$(TEST_BOOT_CLASSPATH) \
+	    -ea junit.textui.TestRunner com.google.devtools.j2objc.SmallTests
 
 compile-tests: $(J2OBJC_JAR)
 	@mkdir -p $(TEST_DIR)
-	@javac -Xlint:unchecked -sourcepath src/test/java \
+	@$(JAVAC) -Xlint:unchecked -sourcepath src/test/java \
 	    -classpath $(TEST_CLASSPATH) -encoding UTF-8 -d $(TEST_DIR) \
 	    `find src/test/java -name '*.java'`
 

@@ -1,6 +1,4 @@
 /*
- * Copyright 2011 Google Inc. All Rights Reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,7 +14,6 @@
 
 package com.google.devtools.j2objc.translate;
 
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.Block;
 import com.google.devtools.j2objc.ast.ClassInstanceCreation;
 import com.google.devtools.j2objc.ast.CompilationUnit;
@@ -27,20 +24,26 @@ import com.google.devtools.j2objc.ast.ReturnStatement;
 import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
 import com.google.devtools.j2objc.ast.StringLiteral;
+import com.google.devtools.j2objc.ast.ThisExpression;
 import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.ast.TypeDeclaration;
 import com.google.devtools.j2objc.ast.UnitTreeVisitor;
-import com.google.devtools.j2objc.types.GeneratedMethodBinding;
-import com.google.devtools.j2objc.types.GeneratedVariableBinding;
-import com.google.devtools.j2objc.types.IOSMethodBinding;
-import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.types.ExecutablePair;
+import com.google.devtools.j2objc.types.GeneratedAnnotationMirror;
+import com.google.devtools.j2objc.types.GeneratedExecutableElement;
+import com.google.devtools.j2objc.types.GeneratedTypeElement;
+import com.google.devtools.j2objc.types.GeneratedVariableElement;
+import com.google.devtools.j2objc.types.NativeType;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.ErrorUtil;
 import com.google.devtools.j2objc.util.Mappings;
 import com.google.devtools.j2objc.util.NameTable;
-
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
-import org.eclipse.jdt.core.dom.Modifier;
+import com.google.devtools.j2objc.util.TypeUtil;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Translates invocations of mapped constructors to method invocation nodes.
@@ -50,15 +53,22 @@ import org.eclipse.jdt.core.dom.Modifier;
  */
 public class JavaToIOSMethodTranslator extends UnitTreeVisitor {
 
+  private static final TypeMirror NSZONE_TYPE = new NativeType("NSZone *");
+
+  private static final ExecutableElement RETAIN_METHOD =
+      GeneratedExecutableElement.newMethodWithSelector(
+          NameTable.RETAIN_METHOD, TypeUtil.ID_TYPE, TypeUtil.NS_OBJECT)
+      .addModifiers(Modifier.PUBLIC);
+
   public JavaToIOSMethodTranslator(CompilationUnit unit) {
     super(unit);
   }
 
   @Override
   public boolean visit(MethodDeclaration node) {
-    IMethodBinding method = node.getMethodBinding();
+    ExecutableElement method = node.getExecutableElement();
 
-    // Check if @ObjectiveCName is used but is mismatched with an overriden method.
+    // Check if @ObjectiveCName is used but is mismatched with an overridden method.
     String name = NameTable.getMethodNameFromAnnotation(method);
     if (name != null) {
       String selector = nameTable.selectorForMethodName(method, name);
@@ -84,12 +94,12 @@ public class JavaToIOSMethodTranslator extends UnitTreeVisitor {
       node.getAnonymousClassDeclaration().accept(this);
     }
 
-    IMethodBinding binding = node.getMethodBinding();
-    String key = BindingUtil.getMethodKey(binding);
+    ExecutableElement method = node.getExecutableElement();
+    String key = Mappings.getMethodKey(method, typeUtil);
     String selector = Mappings.STRING_CONSTRUCTOR_TO_METHOD_MAPPINGS.get(key);
     if (selector != null) {
       assert !node.hasRetainedResult();
-      if (key.equals("java.lang.String.String(Ljava/lang/String;)V")) {
+      if (key.equals("java.lang.String.<init>(Ljava/lang/String;)V")) {
         // Special case: replace new String(constant) to constant (avoid clang warning).
         Expression arg = node.getArgument(0);
         if (arg instanceof StringLiteral) {
@@ -97,9 +107,9 @@ public class JavaToIOSMethodTranslator extends UnitTreeVisitor {
           return false;
         }
       }
-      IOSMethodBinding methodBinding = IOSMethodBinding.newMappedMethod(selector, binding);
+      ExecutableElement newElement = GeneratedExecutableElement.newMappedMethod(selector, method);
       MethodInvocation newInvocation = new MethodInvocation(
-          methodBinding, new SimpleName(binding.getDeclaringClass()));
+          new ExecutablePair(newElement), new SimpleName(ElementUtil.getDeclaringClass(method)));
       TreeUtil.copyList(node.getArguments(), newInvocation.getArguments());
 
       node.replaceWith(newInvocation);
@@ -111,45 +121,52 @@ public class JavaToIOSMethodTranslator extends UnitTreeVisitor {
   public void endVisit(TypeDeclaration node) {
     // If this type implements Cloneable but its parent doesn't, add a
     // copyWithZone: method that calls clone().
-    ITypeBinding type = node.getTypeBinding();
-    ITypeBinding javaLangCloneable = typeEnv.resolveJavaType("java.lang.Cloneable");
-    if (type.isAssignmentCompatible(javaLangCloneable)) {
-      ITypeBinding superclass = type.getSuperclass();
-      if (superclass == null || !superclass.isAssignmentCompatible(javaLangCloneable)) {
-        addCopyWithZoneMethod(node);
-      }
+    TypeElement type = node.getTypeElement();
+    if (implementsCloneable(type.asType()) && !implementsCloneable(type.getSuperclass())) {
+      addCopyWithZoneMethod(node, false);
+    } else if (ElementUtil.getQualifiedName(type).equals("java.lang.Enum")) {
+      addCopyWithZoneMethod(node, true);
     }
   }
 
-  private void addCopyWithZoneMethod(TypeDeclaration node) {
-    // Create copyWithZone: method.
-    ITypeBinding type = node.getTypeBinding().getTypeDeclaration();
-    ITypeBinding idType = typeEnv.resolveIOSType("id");
-    ITypeBinding nsObjectType = typeEnv.resolveIOSType("NSObject");
+  private boolean implementsCloneable(TypeMirror type) {
+    return type != null && typeUtil.findSupertype(type, "java.lang.Cloneable") != null;
+  }
 
-    IOSMethodBinding binding = IOSMethodBinding.newMethod(
-        "copyWithZone:", Modifier.PUBLIC | BindingUtil.ACC_SYNTHETIC, idType, type);
-    MethodDeclaration cloneMethod = new MethodDeclaration(binding);
-    cloneMethod.setHasDeclaration(false);
+  private void addCopyWithZoneMethod(TypeDeclaration node, boolean singleton) {
+    TypeElement type = node.getTypeElement();
+
+    // Create copyWithZone: method.
+    GeneratedExecutableElement copyElement = GeneratedExecutableElement.newMethodWithSelector(
+        "copyWithZone:", TypeUtil.ID_TYPE, type);
+    MethodDeclaration copyDecl = new MethodDeclaration(copyElement);
+    copyDecl.setHasDeclaration(false);
 
     // Add NSZone *zone parameter.
-    GeneratedVariableBinding zoneBinding = new GeneratedVariableBinding(
-        "zone", 0, typeEnv.resolveIOSType("NSZone"), false, true, binding.getDeclaringClass(),
-        binding);
-    binding.addParameter(zoneBinding.getType());
-    cloneMethod.addParameter(new SingleVariableDeclaration(zoneBinding));
+    GeneratedVariableElement zoneParam =
+        GeneratedVariableElement.newParameter("zone", NSZONE_TYPE, copyElement);
+    if (options.nullability()) {
+      DeclaredType annotationType = (DeclaredType)
+          GeneratedTypeElement.newEmulatedInterface("javax.annotation.Nullable").asType();
+      zoneParam.addAnnotationMirror(new GeneratedAnnotationMirror(annotationType));
+    }
+    copyElement.addParameter(zoneParam);
+    copyDecl.addParameter(new SingleVariableDeclaration(zoneParam));
 
     Block block = new Block();
-    cloneMethod.setBody(block);
+    copyDecl.setBody(block);
 
-    GeneratedMethodBinding cloneBinding = GeneratedMethodBinding.newMethod(
-        "java_clone", 0, nsObjectType, type);
-    MethodInvocation invocation = new MethodInvocation(cloneBinding, null);
-    if (Options.useReferenceCounting()) {
-      invocation = new MethodInvocation(typeEnv.getRetainMethod(), invocation);
+    if (singleton) {
+      block.addStatement(new ReturnStatement(new ThisExpression(type.asType())));
+    } else {
+      ExecutableElement cloneElement = ElementUtil.findMethod(typeUtil.getJavaObject(), "clone");
+      MethodInvocation invocation = new MethodInvocation(new ExecutablePair(cloneElement), null);
+      if (options.useReferenceCounting()) {
+        invocation = new MethodInvocation(new ExecutablePair(RETAIN_METHOD), invocation);
+      }
+      block.addStatement(new ReturnStatement(invocation));
     }
-    block.addStatement(new ReturnStatement(invocation));
 
-    node.addBodyDeclaration(cloneMethod);
+    node.addBodyDeclaration(copyDecl);
   }
 }

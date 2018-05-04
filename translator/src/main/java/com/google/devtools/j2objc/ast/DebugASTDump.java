@@ -14,13 +14,14 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.gen.SourceBuilder;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.ErrorUtil;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import javax.lang.model.element.Element;
 import javax.lang.model.type.TypeMirror;
 
 /**
@@ -41,7 +42,9 @@ public class DebugASTDump extends TreeVisitor {
    */
   public static void dumpUnit(CompilationUnit unit) {
     String relativeOutputPath = unit.getMainTypeName().replace('.', '/') + ".ast";
-    File outputFile = new File(Options.getOutputDirectory(), relativeOutputPath);
+    File outputFile = new File(
+        unit.getEnv().options().fileUtil().getOutputDirectory(), relativeOutputPath);
+    outputFile.getParentFile().mkdirs();
 
     try (FileOutputStream fout = new FileOutputStream(outputFile);
         OutputStreamWriter out = new OutputStreamWriter(fout, "UTF-8")) {
@@ -68,6 +71,8 @@ public class DebugASTDump extends TreeVisitor {
     }
     sb.printIndent();
     sb.print(node.getClass().getSimpleName());
+    sb.print(" (line:" + node.getLineNumber() + " pos:" + node.getStartPosition()
+        + " len:" + node.getLength() + ")");
     sb.indent();
     return true;
   }
@@ -85,7 +90,7 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(AnnotationTypeMemberDeclaration node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
     return true;
   }
 
@@ -97,7 +102,7 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(EnumConstantDeclaration node) {
-    printName(node.getName());
+    printName(node.getVariableElement());
     return true;
   }
 
@@ -109,7 +114,7 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(ExpressionMethodReference node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
     return true;
   }
 
@@ -126,6 +131,11 @@ public class DebugASTDump extends TreeVisitor {
   }
 
   @Override
+  public boolean visit(Javadoc node) {
+    return true;
+  }
+
+  @Override
   public boolean visit(MemberValuePair node) {
     printName(node.getName());
     return true;
@@ -133,13 +143,13 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(MethodDeclaration node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
     return true;
   }
 
   @Override
   public boolean visit(MethodInvocation node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
     return true;
   }
 
@@ -193,25 +203,40 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(SingleVariableDeclaration node) {
-    printName(node.getName());
+    printName(node.getVariableElement());
     return true;
   }
 
   @Override
   public boolean visit(SuperFieldAccess node) {
-    printName(node.getName());
+    printName(node.getVariableElement());
     return true;
   }
 
   @Override
   public boolean visit(SuperMethodInvocation node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
     return true;
   }
 
   @Override
   public boolean visit(SuperMethodReference node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
+    return true;
+  }
+
+  @Override
+  public boolean visit(TagElement node) {
+    String tagName = node.getTagKind().toString();
+    sb.print(' ');
+    sb.print(tagName != null ? tagName : "null");
+    return true;
+  }
+
+  @Override
+  public boolean visit(TextElement node) {
+    sb.print(' ');
+    sb.print(node.getText());
     return true;
   }
 
@@ -223,7 +248,7 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(TypeMethodReference node) {
-    printName(node.getName());
+    printName(node.getExecutableElement());
     return true;
   }
 
@@ -235,8 +260,13 @@ public class DebugASTDump extends TreeVisitor {
 
   @Override
   public boolean visit(VariableDeclarationFragment node) {
-    printName(node.getName());
+    printName(node.getVariableElement());
     return true;
+  }
+
+  private void printName(Element element) {
+    sb.print(": ");
+    sb.print(ElementUtil.getName(element));
   }
 
   private void printName(Name name) {

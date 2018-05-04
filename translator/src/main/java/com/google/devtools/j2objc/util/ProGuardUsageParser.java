@@ -114,6 +114,17 @@ public class ProGuardUsageParser {
     return signature.toString();
   }
 
+  public static CodeReferenceMap parseDeadCodeFile(File file) {
+    if (file != null) {
+      try {
+        return ProGuardUsageParser.parse(Files.asCharSource(file, Charset.defaultCharset()));
+      } catch (IOException e) {
+        throw new AssertionError(e);
+      }
+    }
+    return null;
+  }
+
   public static CodeReferenceMap parse(CharSource listing) throws IOException {
     LineProcessor<CodeReferenceMap> processor = new LineProcessor<CodeReferenceMap>() {
       CodeReferenceMap.Builder dead = CodeReferenceMap.builder();
@@ -129,7 +140,7 @@ public class ProGuardUsageParser {
           // Class, but not completely dead; save to read its dead methods
           lastClass = line.substring(0, line.length() - 1);
         } else {
-          dead.addDeadClass(line);
+          dead.addClass(line);
         }
       }
 
@@ -145,17 +156,19 @@ public class ProGuardUsageParser {
         String methodName = methodMatcher.group(6);
         String arguments = methodMatcher.group(7);
         String signature = buildMethodSignature(returnType, arguments);
-        dead.addDeadMethod(lastClass, methodName, signature);
+        dead.addMethod(lastClass, methodName, signature);
       }
 
       private void handleField(String line) throws IOException {
         String name = line.substring(line.lastIndexOf(" ") + 1);
-        dead.addDeadField(lastClass, name);
+        dead.addField(lastClass, name);
       }
 
       @Override
       public boolean processLine(String line) throws IOException {
-        if (line.startsWith("ProGuard, version") || line.startsWith("Reading ")) {
+        if (line.startsWith("ProGuard, version")
+            || line.startsWith("Reading ")
+            || line.startsWith("    processed in")) {
           // ignore output header
         } else if (!line.startsWith("    ")) {
           handleClass(line);

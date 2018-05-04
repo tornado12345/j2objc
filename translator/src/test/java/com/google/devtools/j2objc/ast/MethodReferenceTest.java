@@ -14,9 +14,6 @@
 package com.google.devtools.j2objc.ast;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
-import com.google.devtools.j2objc.util.SourceVersion;
-
 import java.io.IOException;
 
 /**
@@ -25,11 +22,6 @@ import java.io.IOException;
  * @author Seth Kirby
  */
 public class MethodReferenceTest extends GenerationTest {
-  @Override
-  protected void loadOptions() throws IOException {
-    super.loadOptions();
-    Options.setSourceVersion(SourceVersion.JAVA_8);
-  }
 
   // Test the creation of explicit blocks for lambdas with expression bodies.
   public void testCreationReferenceBlockWrapper() throws IOException {
@@ -291,10 +283,9 @@ public class MethodReferenceTest extends GenerationTest {
         + "class Test { void foo() {} static class TestSub extends Test { void foo() {}"
         + "class Inner { I test() { return TestSub.super::foo; } } } }",
         "Test", "Test.m");
-    assertTranslatedSegments(translation,
-        "static void (*Test_TestSub_super$_foo)(id, SEL);",
+    assertTranslatedLines(translation,
         "- (void)bar {",
-        "  Test_TestSub_super$_foo(this$0_->this$0_, @selector(foo));",
+        "  Test_foo(this$0_->this$0_);",
         "}");
   }
 
@@ -324,5 +315,7 @@ public class MethodReferenceTest extends GenerationTest {
         "  Holder *h = create_Holder_initWithInt_(1);",
         "  id<Supplier> s = create_Test_$Lambda$1_initWithHolder_(h);",
         "}");
+    // Make sure the receiver field is initialized.
+    assertTranslation(translation, "JreStrongAssign(&self->target$_, outer$);");
   }
 }

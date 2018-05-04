@@ -23,6 +23,8 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.VariableElement;
 
 /**
  * Manages class and method name mappings.
@@ -30,33 +32,38 @@ import java.util.Properties;
 public class Mappings {
 
   /**
-   * We convert all the String constructor invocations to factory method
-   * invocations because we want to avoid calling [NSString alloc].
+   * We convert all the String constructor invocations to factory method invocations because we want
+   * to avoid calling [NSString alloc].
    */
-  public static final Map<String, String> STRING_CONSTRUCTOR_TO_METHOD_MAPPINGS =
+  public static final ImmutableMap<String, String> STRING_CONSTRUCTOR_TO_METHOD_MAPPINGS =
       ImmutableMap.<String, String>builder()
-      .put("java.lang.String.String()V", "string")
-      .put("java.lang.String.String(Ljava/lang/String;)V", "stringWithString:")
-      .put("java.lang.String.String([B)V", "java_stringWithBytes:")
-      .put("java.lang.String.String([BLjava/lang/String;)V", "java_stringWithBytes:charsetName:")
-      .put("java.lang.String.String([BLjava/nio/charset/Charset;)V",
-          "java_stringWithBytes:charset:")
-      .put("java.lang.String.String([BI)V", "java_stringWithBytes:hibyte:")
-      .put("java.lang.String.String([BII)V", "java_stringWithBytes:offset:length:")
-      .put("java.lang.String.String([BIII)V", "java_stringWithBytes:hibyte:offset:length:")
-      .put("java.lang.String.String([BIILjava/lang/String;)V",
-           "java_stringWithBytes:offset:length:charsetName:")
-      .put("java.lang.String.String([BIILjava/nio/charset/Charset;)V",
-           "java_stringWithBytes:offset:length:charset:")
-      .put("java.lang.String.String([C)V", "java_stringWithCharacters:")
-      .put("java.lang.String.String([CII)V", "java_stringWithCharacters:offset:length:")
-      .put("java.lang.String.String([III)V", "java_stringWithInts:offset:length:")
-      .put("java.lang.String.String(II[C)V", "java_stringWithOffset:length:characters:")
-      .put("java.lang.String.String(Ljava/lang/StringBuffer;)V",
-          "java_stringWithJavaLangStringBuffer:")
-      .put("java.lang.String.String(Ljava/lang/StringBuilder;)V",
-           "java_stringWithJavaLangStringBuilder:")
-      .build();
+          .put("java.lang.String.<init>()V", "string")
+          .put("java.lang.String.<init>(Ljava/lang/String;)V", "stringWithString:")
+          .put("java.lang.String.<init>([B)V", "java_stringWithBytes:")
+          .put(
+              "java.lang.String.<init>([BLjava/lang/String;)V", "java_stringWithBytes:charsetName:")
+          .put(
+              "java.lang.String.<init>([BLjava/nio/charset/Charset;)V",
+              "java_stringWithBytes:charset:")
+          .put("java.lang.String.<init>([BI)V", "java_stringWithBytes:hibyte:")
+          .put("java.lang.String.<init>([BII)V", "java_stringWithBytes:offset:length:")
+          .put("java.lang.String.<init>([BIII)V", "java_stringWithBytes:hibyte:offset:length:")
+          .put(
+              "java.lang.String.<init>([BIILjava/lang/String;)V",
+              "java_stringWithBytes:offset:length:charsetName:")
+          .put(
+              "java.lang.String.<init>([BIILjava/nio/charset/Charset;)V",
+              "java_stringWithBytes:offset:length:charset:")
+          .put("java.lang.String.<init>([C)V", "java_stringWithCharacters:")
+          .put("java.lang.String.<init>([CII)V", "java_stringWithCharacters:offset:length:")
+          .put("java.lang.String.<init>([III)V", "java_stringWithInts:offset:length:")
+          .put(
+              "java.lang.String.<init>(Ljava/lang/StringBuffer;)V",
+              "java_stringWithJavaLangStringBuffer:")
+          .put(
+              "java.lang.String.<init>(Ljava/lang/StringBuilder;)V",
+              "java_stringWithJavaLangStringBuilder:")
+          .build();
 
   private static final String JRE_MAPPINGS_FILE = "JRE.mappings";
 
@@ -116,5 +123,19 @@ public class Mappings {
     if (oldValue != null && !oldValue.equals(value)) {
       ErrorUtil.error(kind + " redefined; was \"" + oldValue + ", now " + value);
     }
+  }
+
+  public static String getMethodKey(ExecutableElement method, TypeUtil typeUtil) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(typeUtil.elementUtil().getBinaryName(ElementUtil.getDeclaringClass(method)));
+    sb.append('.');
+    sb.append(ElementUtil.getName(method));
+    sb.append('(');
+    for (VariableElement param : method.getParameters()) {
+      sb.append(typeUtil.getSignatureName(param.asType()));
+    }
+    sb.append(')');
+    sb.append(typeUtil.getSignatureName(method.getReturnType()));
+    return sb.toString();
   }
 }

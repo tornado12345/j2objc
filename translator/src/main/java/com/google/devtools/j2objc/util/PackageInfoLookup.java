@@ -15,13 +15,17 @@
 package com.google.devtools.j2objc.util;
 
 import com.google.devtools.j2objc.file.InputFile;
+import com.google.j2objc.annotations.ReflectionSupport;
+import com.strobel.decompiler.languages.java.ast.Annotation;
+import com.strobel.decompiler.languages.java.ast.Expression;
+import com.strobel.decompiler.languages.java.ast.MemberReferenceExpression;
+import com.strobel.decompiler.languages.java.ast.PrimitiveExpression;
+import com.strobel.decompiler.languages.java.ast.TypeDeclaration;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import org.objectweb.asm.AnnotationVisitor;
-import org.objectweb.asm.ClassReader;
-import org.objectweb.asm.ClassVisitor;
-import org.objectweb.asm.Opcodes;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Looks up package specific attributes by looking up and parsing package-info java or class files.
@@ -29,18 +33,28 @@ import org.objectweb.asm.Opcodes;
 public class PackageInfoLookup {
 
   private final Map<String, PackageData> map = new HashMap<>();
+  private final FileUtil fileUtil;
 
+  private static final String REFLECTION_SUPPORT_REGEX =
+      "@(?:com\\.google\\.j2objc\\.annotations\\.)?ReflectionSupport\\s*"
+      + "\\([^\\)]*(FULL|NATIVE_ONLY)\\s*\\)";
   // Avoid allocating a new PackageData instance for packages with no attributes.
   private static final PackageData EMPTY_DATA = new PackageData(new PackageDataBuilder());
+
+  public PackageInfoLookup(FileUtil fileUtil) {
+    this.fileUtil = fileUtil;
+  }
 
   private static class PackageData {
 
     private final String objectiveCName;
     private final boolean parametersAreNonnullByDefault;
+    private final ReflectionSupport.Level reflectionSupportLevel;
 
     private PackageData(PackageDataBuilder builder) {
       this.objectiveCName = builder.objectiveCName;
       this.parametersAreNonnullByDefault = builder.parametersAreNonnullByDefault;
+      this.reflectionSupportLevel = builder.reflectionSupportLevel;
     }
   }
 
@@ -49,6 +63,7 @@ public class PackageInfoLookup {
     private boolean isEmpty = true;
     private String objectiveCName = null;
     private boolean parametersAreNonnullByDefault = false;
+    private ReflectionSupport.Level reflectionSupportLevel;
 
     private void setObjectiveCName(String objectiveCName) {
       this.objectiveCName = objectiveCName;
@@ -58,6 +73,11 @@ public class PackageInfoLookup {
     private void setParametersAreNonnullByDefault() {
       parametersAreNonnullByDefault = true;
       isEmpty = false;
+    }
+
+    private void setReflectionSupportLevel(ReflectionSupport.Level level) {
+       this.reflectionSupportLevel = level;
+       isEmpty = false;
     }
 
     private PackageData build() {
@@ -73,6 +93,10 @@ public class PackageInfoLookup {
     return getPackageData(packageName).parametersAreNonnullByDefault;
   }
 
+  public ReflectionSupport.Level getReflectionSupportLevel(String packageName) {
+    return getPackageData(packageName).reflectionSupportLevel;
+  }
+
   private PackageData getPackageData(String packageName) {
     PackageData result = map.get(packageName);
     if (result == null) {
@@ -84,14 +108,14 @@ public class PackageInfoLookup {
 
   private PackageData findPackageData(String packageName) {
     try {
-      String fileName = packageName + ".package-info";
+      String typeName = packageName + ".package-info";
       // First look on the sourcepath.
-      InputFile sourceFile = FileUtil.findOnSourcePath(fileName);
+      InputFile sourceFile = fileUtil.findOnSourcePath(typeName);
       if (sourceFile != null) {
         return parseDataFromSourceFile(sourceFile);
       }
       // Then look on the classpath.
-      InputFile classFile = FileUtil.findOnClassPath(fileName);
+      InputFile classFile = fileUtil.findOnClassPath(typeName);
       if (classFile != null) {
         return parseDataFromClassFile(classFile);
       }
@@ -101,9 +125,37 @@ public class PackageInfoLookup {
     return EMPTY_DATA;
   }
 
+  /**
+   *  Return true if pkgInfo has the specified annotation.
+   *
+   *  @param pkgInfo package-info source code
+   *  @param annotation fully qualified name of the annotation
+   */
+  private static boolean hasAnnotation(String pkgInfo, String annotation) {
+    if (!annotation.contains(".")) {
+      ErrorUtil.warning(annotation + " is not a fully qualified name");
+    }
+    if (pkgInfo.contains("@" + annotation)) {
+      return true;
+    }
+    int idx = annotation.lastIndexOf(".");
+    String annotationPackageName = annotation.substring(0, idx);
+    String annotationSimpleName = annotation.substring(idx + 1);
+    if (pkgInfo.contains("@" + annotationSimpleName)) {
+      String importRegex =
+          "import\\s*" + annotationPackageName + "(\\.\\*|\\." + annotationSimpleName + ")";
+      Pattern p = Pattern.compile(importRegex);
+      Matcher m = p.matcher(pkgInfo);
+      if (m.find()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private PackageData parseDataFromSourceFile(InputFile file) throws IOException {
     PackageDataBuilder builder = new PackageDataBuilder();
-    String pkgInfo = FileUtil.readFile(file);
+    String pkgInfo = fileUtil.readFile(file);
 
     // @ObjectiveCName
     int i = pkgInfo.indexOf("@ObjectiveCName");
@@ -126,30 +178,48 @@ public class PackageInfoLookup {
         || pkgInfo.contains("@javax.annotation.ParametersAreNonnullByDefault")) {
       builder.setParametersAreNonnullByDefault();
     }
+
+    // @ReflectionSupportLevel
+    if (hasAnnotation(pkgInfo, "com.google.j2objc.annotations.ReflectionSupport")) {
+      Pattern p = Pattern.compile(REFLECTION_SUPPORT_REGEX);
+      Matcher m = p.matcher(pkgInfo);
+      if (m.find()) {
+        String level = m.group(1);
+        builder.setReflectionSupportLevel(ReflectionSupport.Level.valueOf(level));
+      } else {
+        ErrorUtil.warning("Invalid ReflectionSupport Level in " + file.getUnitName());
+      }
+    }
     return builder.build();
   }
 
   private PackageData parseDataFromClassFile(InputFile file) throws IOException {
     PackageDataBuilder builder = new PackageDataBuilder();
-    ClassReader classReader = new ClassReader(file.getInputStream());
-    classReader.accept(new ClassVisitor(Opcodes.ASM5) {
-      @Override
-      public AnnotationVisitor visitAnnotation(String desc, boolean visible) {
-        if (desc.equals("Lcom/google/j2objc/annotations/ObjectiveCName;")) {
-          return new AnnotationVisitor(Opcodes.ASM5) {
-            @Override
-            public void visit(String name, Object value) {
-              if (name.equals("value")) {
-                builder.setObjectiveCName(value.toString());
-              }
-            }
-          };
-        } else if (desc.equals("Ljavax/annotation/ParametersAreNonnullByDefault;")) {
-          builder.setParametersAreNonnullByDefault();
+    ClassFile classFile = ClassFile.create(file);
+    TypeDeclaration typeDecl = classFile.getType();
+    for (Annotation annotation : typeDecl.getAnnotations()) {
+      String signature = annotation.getType().toTypeReference().getErasedSignature();
+      if (signature.equals("Lcom/google/j2objc/annotations/ObjectiveCName;")) {
+        for (Expression expr : annotation.getArguments()) {
+          if (expr instanceof MemberReferenceExpression) {
+            String value = ((MemberReferenceExpression) expr).getMemberName();
+            builder.setObjectiveCName(value);
+          } else if (expr instanceof PrimitiveExpression) {
+            Object value = ((PrimitiveExpression) expr).getValue();
+            builder.setObjectiveCName((String) value);
+          }
         }
-        return null;
+      } else if (signature.equals("Ljavax/annotation/ParametersAreNonnullByDefault;")) {
+        builder.setParametersAreNonnullByDefault();
+      } else if (signature.equals("Lcom/google/j2objc/annotations/ReflectionSupport;")) {
+        for (Expression expr : annotation.getArguments()) {
+          if (expr instanceof MemberReferenceExpression) {
+            String value = ((MemberReferenceExpression) expr).getMemberName();
+            builder.setReflectionSupportLevel(ReflectionSupport.Level.valueOf(value));
+          }
+        }
       }
-    }, 0);
+    }
     return builder.build();
   }
 }

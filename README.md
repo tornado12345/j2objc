@@ -1,7 +1,5 @@
 # J2ObjC: Java to Objective-C Translator and Runtime #
 
-[![Build Status](https://travis-ci.org/google/j2objc.svg)](https://travis-ci.org/google/j2objc)
-
 **Project site:** <http://j2objc.org><br>
 **J2ObjC blog:** <http://j2objc.blogspot.com><br>
 **Questions and discussion:** <http://groups.google.com/group/j2objc-discuss>
@@ -37,13 +35,13 @@ code for their Android app, which they either own or are licensed to use.
 
 * JDK 1.8 or higher
 * Mac workstation or laptop
-* OS X 10.11 or higher
-* Xcode 7 or higher
+* OS X 10.12 or higher
+* Xcode 8 or higher
 
 ## License ##
 
 This library is distributed under the Apache 2.0 license found in the
 [LICENSE](./LICENSE) file with the following exceptions.
 The protocol buffers library is distributed under the same BSD license as
-Google's protocol buffers. See [README](protobuf/README.md) and
+Google's protocol buffers. See [README](/protobuf/google/README.md) and
 [LICENSE](protobuf/LICENSE).

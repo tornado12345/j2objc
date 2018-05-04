@@ -16,12 +16,12 @@
 
 package com.google.devtools.j2objc.util;
 
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableTable;
 import com.google.common.collect.ListMultimap;
+import com.google.common.collect.MultimapBuilder;
 import com.google.common.collect.Table;
 import java.util.HashSet;
 import java.util.Set;
@@ -38,7 +38,8 @@ public class CodeReferenceMap {
   public static class Builder {
     private final Set<String> deadClasses = new HashSet<String>();
     private final Table<String, String, Set<String>> deadMethods = HashBasedTable.create();
-    private final ListMultimap<String, String> deadFields = ArrayListMultimap.create();
+    private final ListMultimap<String, String> deadFields =
+        MultimapBuilder.hashKeys().arrayListValues().build();
 
     public CodeReferenceMap build() {
       ImmutableTable.Builder<String, String, ImmutableSet<String>> deadMethodsBuilder =
@@ -55,12 +56,12 @@ public class CodeReferenceMap {
           ImmutableMultimap.copyOf(deadFields));
     }
 
-    public Builder addDeadClass(String clazz) {
+    public Builder addClass(String clazz) {
       deadClasses.add(clazz);
       return this;
     }
 
-    public Builder addDeadMethod(String clazz, String name, String signature) {
+    public Builder addMethod(String clazz, String name, String signature) {
       if (!deadMethods.contains(clazz, name)) {
         deadMethods.put(clazz, name, new HashSet<String>());
       }
@@ -68,7 +69,7 @@ public class CodeReferenceMap {
       return this;
     }
 
-    public Builder addDeadField(String clazz, String field) {
+    public Builder addField(String clazz, String field) {
       deadFields.put(clazz, field);
       return this;
     }
@@ -78,22 +79,34 @@ public class CodeReferenceMap {
     return new Builder();
   }
 
-  private final ImmutableSet<String> deadClasses;
-  private final ImmutableTable<String, String, ImmutableSet<String>> deadMethods;
-  private final ImmutableMultimap<String, String> deadFields;
+  private final ImmutableSet<String> referencedClasses;
+  private final ImmutableTable<String, String, ImmutableSet<String>> referencedMethods;
+  private final ImmutableMultimap<String, String> referencedFields;
   private final Set<String> hasConstructorRemovedClasses = new HashSet<>();
 
   private CodeReferenceMap(
-      ImmutableSet<String> deadClasses,
-      ImmutableTable<String, String, ImmutableSet<String>> deadMethods,
-      ImmutableMultimap<String, String> deadFields) {
-    this.deadClasses = deadClasses;
-    this.deadMethods = deadMethods;
-    this.deadFields = deadFields;
+      ImmutableSet<String> referencedClasses,
+      ImmutableTable<String, String, ImmutableSet<String>> referencedMethods,
+      ImmutableMultimap<String, String> referencedFields) {
+    this.referencedClasses = referencedClasses;
+    this.referencedMethods = referencedMethods;
+    this.referencedFields = referencedFields;
+  }
+
+  public ImmutableSet<String> getReferencedClasses() {
+    return referencedClasses;
+  }
+
+  public ImmutableTable<String, String, ImmutableSet<String>> getReferencedMethods() {
+    return referencedMethods;
+  }
+
+  public ImmutableMultimap<String, String> getReferencedFields() {
+    return referencedFields;
   }
 
   public boolean containsClass(String clazz) {
-    return deadClasses.contains(clazz);
+    return referencedClasses.contains(clazz);
   }
 
   public boolean containsClass(TypeElement clazz, ElementUtil elementUtil) {
@@ -101,8 +114,9 @@ public class CodeReferenceMap {
   }
 
   public boolean containsMethod(String clazz, String name, String signature) {
-    return deadClasses.contains(clazz)
-        || (deadMethods.contains(clazz, name) && deadMethods.get(clazz, name).contains(signature));
+    return referencedClasses.contains(clazz)
+        || (referencedMethods.contains(clazz, name)
+           && referencedMethods.get(clazz, name).contains(signature));
   }
 
   public boolean containsMethod(ExecutableElement method, TypeUtil typeUtil) {
@@ -113,11 +127,11 @@ public class CodeReferenceMap {
   }
 
   public boolean containsField(String clazz, String field) {
-    return deadClasses.contains(clazz) || deadFields.containsEntry(clazz, field);
+    return referencedClasses.contains(clazz) || referencedFields.containsEntry(clazz, field);
   }
 
   public boolean isEmpty() {
-    return deadClasses.isEmpty() && deadMethods.isEmpty() && deadFields.isEmpty();
+    return referencedClasses.isEmpty() && referencedMethods.isEmpty() && referencedFields.isEmpty();
   }
 
   public void addConstructorRemovedClass(String clazz) {
@@ -132,9 +146,9 @@ public class CodeReferenceMap {
   public String toString() {
     StringBuilder builder = new StringBuilder();
 
-    builder.append(deadClasses.asList().toString() + "\n");
-    builder.append(deadFields.toString() + "\n");
-    builder.append(deadMethods.toString());
+    builder.append(referencedClasses.asList().toString() + "\n");
+    builder.append(referencedFields.toString() + "\n");
+    builder.append(referencedMethods.toString());
 
     return builder.toString();
   }

@@ -16,9 +16,7 @@ package com.google.devtools.j2objc.translate;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.j2objc.ast.AnnotationTypeDeclaration;
-import com.google.devtools.j2objc.ast.AnonymousClassDeclaration;
 import com.google.devtools.j2objc.ast.ClassInstanceCreation;
-import com.google.devtools.j2objc.ast.CommonTypeDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.ConstructorInvocation;
 import com.google.devtools.j2objc.ast.CreationReference;
@@ -35,10 +33,10 @@ import com.google.devtools.j2objc.ast.QualifiedName;
 import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
 import com.google.devtools.j2objc.ast.SuperConstructorInvocation;
+import com.google.devtools.j2objc.ast.SuperFieldAccess;
 import com.google.devtools.j2objc.ast.SuperMethodInvocation;
 import com.google.devtools.j2objc.ast.SuperMethodReference;
 import com.google.devtools.j2objc.ast.ThisExpression;
-import com.google.devtools.j2objc.ast.TreeNode;
 import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.ast.Type;
 import com.google.devtools.j2objc.ast.TypeDeclaration;
@@ -122,8 +120,9 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
       // If type is an interface, type.getSuperClass() returns null even though all interfaces
       // "inherit" from Object. Therefore we add this manually to make the set complete. This is
       // needed because Java 8 default methods can call methods in Object.
+      // TODO(tball): remove when javac update is complete.
       if (ElementUtil.isInterface(type)) {
-        inheritedScopeBuilder.add(typeEnv.getJavaObjectElement());
+        inheritedScopeBuilder.add(typeUtil.getJavaObject());
       }
 
       this.inheritedScope = inheritedScopeBuilder.build();
@@ -240,10 +239,10 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
     return path;
   }
 
-  private Name getPathForField(VariableElement var) {
+  private Name getPathForField(VariableElement var, TypeMirror type) {
     Name path = getOuterPathInherited((TypeElement) var.getEnclosingElement());
     if (path != null) {
-      path = Name.newName(path, var);
+      path = Name.newName(path, var, type);
     }
     return path;
   }
@@ -257,7 +256,7 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
     }
     if (var.getConstantValue() != null) {
       // Var has constant value, return a literal.
-      return TreeUtil.newLiteral(var.getConstantValue(), typeEnv);
+      return TreeUtil.newLiteral(var.getConstantValue(), typeUtil);
     }
     Scope lastScope = scope;
     while (!(scope = scope.outer).declaredVars.contains(var)) {
@@ -284,7 +283,7 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
 
   // Resolve the path for the outer scope to a SuperConstructorInvocation. This path goes on the
   // type node because there may be implicit super invocations.
-  private void addSuperOuterPath(CommonTypeDeclaration node) {
+  private void addSuperOuterPath(TypeDeclaration node) {
     TypeElement superclass = ElementUtil.getSuperclass(node.getTypeElement());
     if (superclass != null && captureInfo.needsOuterParam(superclass)) {
       node.setSuperOuter(getOuterPathInherited(ElementUtil.getDeclaringClass(superclass)));
@@ -322,31 +321,6 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
   }
 
   @Override
-  public boolean visit(AnonymousClassDeclaration node) {
-    pushType(node.getTypeElement());
-    return true;
-  }
-
-  @Override
-  public void endVisit(AnonymousClassDeclaration node) {
-    TypeElement type = node.getTypeElement();
-    TreeNode parent = node.getParent();
-    Expression superOuter = parent instanceof ClassInstanceCreation
-        ? TreeUtil.remove(((ClassInstanceCreation) parent).getExpression()) : null;
-    if (superOuter != null) {
-      // The parent creation node has an explicit outer reference that needs to be passed through to
-      // the superclass constructor.
-      ((ClassInstanceCreation) parent).setSuperOuterArg(superOuter);
-      node.setSuperOuter(new SimpleName(
-          captureInfo.createSuperOuterParam(type, superOuter.getTypeMirror())));
-    } else {
-      addSuperOuterPath(node);
-    }
-    addCaptureArgs(ElementUtil.getSuperclass(type), node.getSuperCaptureArgs());
-    popType();
-  }
-
-  @Override
   public boolean visit(EnumDeclaration node) {
     pushType(node.getTypeElement());
     return true;
@@ -372,8 +346,7 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
     // Resolve outer and capture arguments.
     TypeElement typeElement = node.getTypeElement();
     if (captureInfo.needsOuterParam(typeElement)) {
-      node.setLambdaOuterArg(
-          getOuterPathInherited(TypeUtil.asTypeElement(captureInfo.getOuterType(typeElement))));
+      node.setLambdaOuterArg(getOuterPathInherited(ElementUtil.getDeclaringClass(typeElement)));
     }
     addCaptureArgs(typeElement, node.getLambdaCaptureArgs());
   }
@@ -409,6 +382,16 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
   }
 
   @Override
+  public boolean visit(SuperFieldAccess node) {
+    VariableElement var = node.getVariableElement();
+    Name path = getPathForField(var, node.getTypeMirror());
+    if (path != null) {
+      node.replaceWith(path);
+    }
+    return false;
+  }
+
+  @Override
   public boolean visit(QualifiedName node) {
     node.getQualifier().accept(this);
     return false;
@@ -420,8 +403,8 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
     if (var != null) {
       Expression path = null;
       if (ElementUtil.isInstanceVar(var)) {
-        path = getPathForField(var);
-      } else if (!ElementUtil.isField(var)) {
+        path = getPathForField(var, node.getTypeMirror());
+      } else if (!var.getKind().isField()) {
         path = getPathForLocalVar(var);
       }
       if (path != null) {
@@ -501,8 +484,7 @@ public class OuterReferenceResolver extends UnitTreeVisitor {
     TypeElement typeElement = (TypeElement) node.getExecutableElement().getEnclosingElement();
     if (node.getExpression() == null) {
       whenNeedsOuterParam(typeElement, () -> {
-        node.setExpression(
-            getOuterPathInherited(TypeUtil.asTypeElement(captureInfo.getOuterType(typeElement))));
+        node.setExpression(getOuterPathInherited(ElementUtil.getDeclaringClass(typeElement)));
       });
     }
     if (ElementUtil.isLocal(typeElement)) {

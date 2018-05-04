@@ -15,11 +15,11 @@
 package com.google.devtools.cyclefinder;
 
 import com.google.common.base.Strings;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Sets;
 import com.google.common.io.Files;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.file.RegularInputFile;
-import com.google.devtools.j2objc.jdt.JdtParser;
-import com.google.devtools.j2objc.pipeline.J2ObjCIncompatibleStripper;
 import com.google.devtools.j2objc.translate.LambdaTypeElementAdder;
 import com.google.devtools.j2objc.translate.OuterReferenceResolver;
 import com.google.devtools.j2objc.util.ErrorUtil;
@@ -29,8 +29,11 @@ import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A tool for finding possible reference cycles in a Java program.
@@ -40,6 +43,11 @@ import java.util.List;
 public class CycleFinder {
 
   private final Options options;
+  private final com.google.devtools.j2objc.Options j2objcOptions;
+  private final NameList blacklist;
+  private final List<List<Edge>> cycles = new ArrayList<>();
+
+  private ReferenceGraph referenceGraph = null;
 
   static {
     // Enable assertions in the cycle finder.
@@ -51,18 +59,22 @@ public class CycleFinder {
 
   public CycleFinder(Options options) throws IOException {
     this.options = options;
-    com.google.devtools.j2objc.Options.load(new String[] {
+    j2objcOptions = new com.google.devtools.j2objc.Options();
+
+    j2objcOptions.load(new String[] {
+      "-sourcepath", Strings.nullToEmpty(options.getSourcepath()),
+      "-classpath", Strings.nullToEmpty(options.getClasspath()),
       "-encoding", options.fileEncoding(),
       "-source",   options.sourceVersion().flag()
     });
+    blacklist = getBlacklist();
   }
 
-  private static Parser createParser(Options options) {
-    Parser parser = new JdtParser();
+  private Parser createParser() {
+    Parser parser = Parser.newParser(j2objcOptions);
     parser.addSourcepathEntries(Strings.nullToEmpty(options.getSourcepath()));
     parser.addClasspathEntries(Strings.nullToEmpty(options.getBootclasspath()));
     parser.addClasspathEntries(Strings.nullToEmpty(options.getClasspath()));
-    parser.setEncoding(options.fileEncoding());
     return parser;
   }
 
@@ -91,7 +103,7 @@ public class CycleFinder {
     if (blackListFiles.isEmpty()) {
       return null;
     }
-    return NameList.createFromFiles(blackListFiles);
+    return NameList.createFromFiles(blackListFiles, options.fileEncoding());
   }
 
   private File stripIncompatible(
@@ -100,7 +112,7 @@ public class CycleFinder {
     for (int i = 0; i < sourceFileNames.size(); i++) {
       String fileName = sourceFileNames.get(i);
       RegularInputFile file = new RegularInputFile(fileName);
-      String source = FileUtil.readFile(file);
+      String source = j2objcOptions.fileUtil().readFile(file);
       if (!source.contains("J2ObjCIncompatible")) {
         continue;
       }
@@ -108,22 +120,23 @@ public class CycleFinder {
         strippedDir = Files.createTempDir();
         parser.prependSourcepathEntry(strippedDir.getPath());
       }
-      org.eclipse.jdt.core.dom.CompilationUnit unit = parser.parseWithoutBindings(fileName, source);
-      String qualifiedName = FileUtil.getQualifiedMainTypeName(file, unit);
-      String newSource = J2ObjCIncompatibleStripper.strip(source, unit);
+      Parser.ParseResult parseResult = parser.parseWithoutBindings(file, source);
+      String qualifiedName = parseResult.mainTypeName();
+      parseResult.stripIncompatibleSource();
       String relativePath = qualifiedName.replace('.', File.separatorChar) + ".java";
       File strippedFile = new File(strippedDir, relativePath);
       Files.createParentDirs(strippedFile);
-      Files.write(newSource, strippedFile, Charset.forName(options.fileEncoding()));
+      Files.write(parseResult.getSource(), strippedFile, Charset.forName(options.fileEncoding()));
       sourceFileNames.set(i, strippedFile.getPath());
     }
     return strippedDir;
   }
 
-  public List<List<Edge>> findCycles() throws IOException {
-    final TypeCollector typeCollector = new TypeCollector();
-    Parser parser = createParser(options);
-    final CaptureFields captureFields = new CaptureFields();
+  public void constructGraph() throws IOException {
+    Parser parser = createParser();
+    NameList whitelist =
+        NameList.createFromFiles(options.getWhitelistFiles(), options.fileEncoding());
+    final GraphBuilder graphBuilder = new GraphBuilder(whitelist);
 
     List<String> sourceFiles = options.getSourceFiles();
     File strippedDir = stripIncompatible(sourceFiles, parser);
@@ -132,9 +145,8 @@ public class CycleFinder {
       @Override
       public void handleParsedUnit(String path, CompilationUnit unit) {
         new LambdaTypeElementAdder(unit).run();
-        typeCollector.visitAST(unit);
         new OuterReferenceResolver(unit).run();
-        captureFields.collect(unit);
+        graphBuilder.visitAST(unit);
       }
     };
     parser.parseFiles(sourceFiles, handler, options.sourceVersion());
@@ -142,14 +154,64 @@ public class CycleFinder {
     FileUtil.deleteTempDir(strippedDir);
 
     if (ErrorUtil.errorCount() > 0) {
-      return null;
+      return;
     }
 
-    // Construct the graph and find cycles.
-    ReferenceGraph graph = new ReferenceGraph(
-        typeCollector, captureFields, NameList.createFromFiles(options.getWhitelistFiles()),
-        getBlacklist());
-    return graph.findCycles();
+    // Construct the graph.
+    referenceGraph = graphBuilder.constructGraph().getGraph();
+  }
+
+  public List<List<Edge>> findCycles() {
+    for (ReferenceGraph component :
+        referenceGraph.getStronglyConnectedComponents(getSeedNodes(referenceGraph))) {
+      handleStronglyConnectedComponent(component);
+    }
+    return cycles;
+  }
+
+  private Set<TypeNode> getSeedNodes(ReferenceGraph graph) {
+    if (blacklist == null) {
+      return graph.getNodes();
+    }
+    Set<TypeNode> seedNodes = new HashSet<>();
+    for (TypeNode node : graph.getNodes()) {
+      if (blacklist.containsType(node)) {
+        seedNodes.add(node);
+      }
+    }
+    return seedNodes;
+  }
+
+  private void handleStronglyConnectedComponent(ReferenceGraph subgraph) {
+    // Make sure to find at least one cycle for each type in the SCC.
+    Set<TypeNode> unusedTypes = Sets.newHashSet(subgraph.getNodes());
+    while (!unusedTypes.isEmpty()) {
+      TypeNode root = Iterables.getFirst(unusedTypes, null);
+      assert root != null;
+      List<Edge> cycle = subgraph.findShortestCycle(root);
+      if (shouldAddCycle(cycle)) {
+        cycles.add(cycle);
+      }
+      for (Edge e : cycle) {
+        unusedTypes.remove(e.getOrigin());
+      }
+    }
+  }
+
+  public ReferenceGraph getReferenceGraph() {
+    return referenceGraph;
+  }
+
+  private boolean shouldAddCycle(List<Edge> cycle) {
+    if (blacklist == null) {
+      return true;
+    }
+    for (Edge e : cycle) {
+      if (blacklist.containsType(e.getOrigin())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public static void printCycles(Collection<? extends Iterable<Edge>> cycles, PrintStream out) {
@@ -161,7 +223,7 @@ public class CycleFinder {
       }
       out.println("----- Full Types -----");
       for (Edge e : cycle) {
-        out.println(e.getOrigin().getKey());
+        out.println(e.getOrigin().getSignature());
       }
     }
     out.println();
@@ -176,9 +238,14 @@ public class CycleFinder {
     CycleFinder finder = new CycleFinder(options);
     finder.testFileExistence();
     exitOnErrors();
-    List<List<Edge>> cycles = finder.findCycles();
+    finder.constructGraph();
     exitOnErrors();
-    printCycles(cycles, System.out);
-    System.exit(ErrorUtil.errorCount() + cycles.size());
+    if (options.printReferenceGraph()) {
+      finder.getReferenceGraph().print(System.out);
+    } else {
+      List<List<Edge>> cycles = finder.findCycles();
+      printCycles(cycles, System.out);
+      System.exit(ErrorUtil.errorCount() + cycles.size());
+    }
   }
 }

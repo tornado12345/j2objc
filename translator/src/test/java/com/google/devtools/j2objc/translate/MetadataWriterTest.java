@@ -70,18 +70,20 @@ public class MetadataWriterTest extends GenerationTest {
     assertTranslation(translation, "{ NULL, \"LNSObject;\", 0x400, -1, -1, -1, 3, -1, -1 },");
     assertTranslation(translation, "{ NULL, \"V\", 0x400, 4, 5, -1, 6, -1, -1 },");
     assertTranslation(translation, "{ NULL, \"V\", 0x400, 7, 8, -1, 9, -1, -1 },");
-    assertTranslation(translation, "methods[0].selector = @selector(test1)");
-    assertTranslation(translation, "methods[1].selector = @selector(test2)");
-    assertTranslation(translation, "methods[2].selector = @selector(test3)");
-    assertTranslation(translation, "methods[3].selector = @selector(test4)");
-    assertTranslation(translation, "methods[4].selector = @selector(test5)");
+    // Implicit default constructor
+    assertTranslation(translation, "methods[0].selector = @selector(init)");
+    assertTranslation(translation, "methods[1].selector = @selector(test1)");
+    assertTranslation(translation, "methods[2].selector = @selector(test2)");
+    assertTranslation(translation, "methods[3].selector = @selector(test3)");
+    assertTranslation(translation, "methods[4].selector = @selector(test4)");
+    assertTranslation(translation, "methods[5].selector = @selector(test5)");
     assertTranslation(translation,
-        "methods[5].selector = @selector(test6WithNSString:withNSObjectArray:)");
-    assertTranslation(translation, "methods[6].selector = @selector(test7)");
-    assertTranslation(translation, "methods[7].selector = @selector(test8)");
-    assertTranslation(translation, "methods[8].selector = @selector(test9)");
-    assertTranslation(translation, "methods[9].selector = @selector(test10WithInt:withId:)");
-    assertTranslation(translation, "methods[10].selector = @selector(test11WithId:withId:withId:)");
+        "methods[6].selector = @selector(test6WithNSString:withNSObjectArray:)");
+    assertTranslation(translation, "methods[7].selector = @selector(test7)");
+    assertTranslation(translation, "methods[8].selector = @selector(test8)");
+    assertTranslation(translation, "methods[9].selector = @selector(test9)");
+    assertTranslation(translation, "methods[10].selector = @selector(test10WithInt:withId:)");
+    assertTranslation(translation, "methods[11].selector = @selector(test11WithId:withId:withId:)");
 
     assertTranslation(translation,
         "static const void *ptrTable[] = { \"test6\", \"LNSString;[LNSObject;\", "
@@ -186,20 +188,16 @@ public class MetadataWriterTest extends GenerationTest {
     String translation = translateSourceFile(
         "public class Test { @Deprecated Test() {} }",
         "Test", "Test.m");
-    assertTranslatedLines(translation,
-        "IOSObjectArray *Test__Annotations$0() {",
-        "return [IOSObjectArray arrayWithObjects:(id[]){ create_JavaLangDeprecated() } "
-        + "count:1 type:JavaLangAnnotationAnnotation_class_()];");
+    assertTranslation(translation, "IOSObjectArray *Test__Annotations$0()");
+    assertTranslation(translation, "create_JavaLangDeprecated");
   }
 
   public void testConstructorAnnotationWithParameter() throws IOException {
     String translation = translateSourceFile(
         "public class Test { @Deprecated Test(int i) {} }",
         "Test", "Test.m");
-    assertTranslatedLines(translation,
-        "IOSObjectArray *Test__Annotations$0() {",
-        "return [IOSObjectArray arrayWithObjects:(id[]){ create_JavaLangDeprecated() } "
-        + "count:1 type:JavaLangAnnotationAnnotation_class_()];");
+    assertTranslation(translation, "IOSObjectArray *Test__Annotations$0()");
+    assertTranslation(translation, "create_JavaLangDeprecated");
   }
 
   public void testTypeAnnotationDefaultParameter() throws IOException {
@@ -238,5 +236,16 @@ public class MetadataWriterTest extends GenerationTest {
         "IOSObjectArray *FooTest__Annotations$0() {",
         "return [IOSObjectArray arrayWithObjects:(id[]){ create_FooBar(@\"mynames\") } "
         + "count:1 type:JavaLangAnnotationAnnotation_class_()];");
+  }
+
+  public void testOuterAndCaptureFieldsInMetadata() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { int i; void test(int j) { class Inner { int foo() { return i + j; } } } }",
+        "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "static const J2ObjcFieldInfo fields[] = {",
+        "  { \"this$0_\", \"LTest;\", .constantValue.asLong = 0, 0x1012, -1, -1, -1, -1 },",
+        "  { \"val$j_\", \"I\", .constantValue.asLong = 0, 0x1012, -1, -1, -1, -1 },",
+        "};");
   }
 }

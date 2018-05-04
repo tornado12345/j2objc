@@ -18,7 +18,6 @@ import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.ast.AnonymousClassDeclaration;
 import com.google.devtools.j2objc.ast.ClassInstanceCreation;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.Expression;
@@ -98,7 +97,7 @@ public class OuterReferenceResolverTest extends GenerationTest {
     assertTrue(expr instanceof SimpleName);
     VariableElement fooReceiver = TreeUtil.getVariableElement(expr);
     assertNotNull(fooReceiver);
-    assertEquals("B", fooReceiver.asType().toString());
+    assertEquals("Test.B", fooReceiver.asType().toString());
   }
 
   public void testCapturedLocalVariable() {
@@ -106,8 +105,8 @@ public class OuterReferenceResolverTest extends GenerationTest {
         "class Test { void test(final int i) { Runnable r = new Runnable() { "
         + "public void run() { int i2 = i + 1; } }; } }");
 
-    AnonymousClassDeclaration runnableNode =
-        (AnonymousClassDeclaration) nodesByType.get(Kind.ANONYMOUS_CLASS_DECLARATION).get(0);
+    TypeDeclaration runnableNode = (TypeDeclaration) nodesByType.get(Kind.TYPE_DECLARATION).get(1);
+    assertTrue(ElementUtil.isAnonymous(runnableNode.getTypeElement()));
     assertFalse(captureInfo.needsOuterReference(runnableNode.getTypeElement()));
     List<VariableElement> innerFields = Lists.newArrayList(
         captureInfo.getCaptureFields(runnableNode.getTypeElement()));
@@ -137,8 +136,8 @@ public class OuterReferenceResolverTest extends GenerationTest {
         + "class Test { void test(@Weak final int i) { Runnable r = new Runnable() { "
         + "public void run() { int i2 = i + 1; } }; } }");
 
-    AnonymousClassDeclaration runnableNode =
-        (AnonymousClassDeclaration) nodesByType.get(Kind.ANONYMOUS_CLASS_DECLARATION).get(0);
+    TypeDeclaration runnableNode = (TypeDeclaration) nodesByType.get(Kind.TYPE_DECLARATION).get(1);
+    assertTrue(ElementUtil.isAnonymous(runnableNode.getTypeElement()));
     List<VariableElement> innerFields = Lists.newArrayList(
         captureInfo.getCaptureFields(runnableNode.getTypeElement()));
     assertEquals(1, innerFields.size());
@@ -149,8 +148,8 @@ public class OuterReferenceResolverTest extends GenerationTest {
     resolveSource("Test",
         "class Test { static void test() { class LocalClass {}; new LocalClass() {}; } }");
 
-    AnonymousClassDeclaration decl =
-        (AnonymousClassDeclaration) nodesByType.get(Kind.ANONYMOUS_CLASS_DECLARATION).get(0);
+    TypeDeclaration decl = (TypeDeclaration) nodesByType.get(Kind.TYPE_DECLARATION).get(2);
+    assertTrue(ElementUtil.isAnonymous(decl.getTypeElement()));
     assertFalse(captureInfo.needsOuterParam(decl.getTypeElement()));
   }
 
@@ -160,8 +159,8 @@ public class OuterReferenceResolverTest extends GenerationTest {
         + "class Local { public void foo() { o.toString(); } } "
         + "return new Runnable() { public void run() { new Local(); } }; } }");
 
-    AnonymousClassDeclaration runnableNode =
-        (AnonymousClassDeclaration) nodesByType.get(Kind.ANONYMOUS_CLASS_DECLARATION).get(0);
+    TypeDeclaration runnableNode = (TypeDeclaration) nodesByType.get(Kind.TYPE_DECLARATION).get(2);
+    assertTrue(ElementUtil.isAnonymous(runnableNode.getTypeElement()));
     List<VariableElement> innerFields = Lists.newArrayList(
         captureInfo.getCaptureFields(runnableNode.getTypeElement()));
     assertEquals(1, innerFields.size());
@@ -206,6 +205,13 @@ public class OuterReferenceResolverTest extends GenerationTest {
     VariableElement var = TreeUtil.getVariableElement(outerArg);
     assertNotNull(var);
     assertEquals("this$0", ElementUtil.getName(var));
+  }
+
+  public void testQualifiedFieldAccess() throws IOException {
+    addSourceFile("class A { int i; }", "A.java");
+    String translation = translateSourceFile(
+        "class B extends A { class C { int foo() { return B.super.i; } } }", "B", "B.m");
+    assertTranslation(translation, "return this$0_->i_;");
   }
 
   private void resolveSource(String name, String source) {

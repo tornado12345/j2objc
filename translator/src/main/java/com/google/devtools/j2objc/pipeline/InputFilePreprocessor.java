@@ -32,7 +32,7 @@ import java.util.List;
 import java.util.logging.Logger;
 
 /**
- * Preprocesses each input file in the batch.
+ * Preprocesses each Java file in the batch.
  */
 public class InputFilePreprocessor {
 
@@ -40,14 +40,18 @@ public class InputFilePreprocessor {
 
   private final Parser parser;
   private File strippedSourcesDir;
+  private final Options options;
 
   public InputFilePreprocessor(Parser parser) {
     this.parser = parser;
+    this.options = parser.options();
   }
 
   public void processInputs(Iterable<ProcessingContext> inputs) {
     for (ProcessingContext input : inputs) {
-      processInput(input);
+      if (input.getFile().getUnitName().endsWith(".java")) {
+        processInput(input);
+      }
     }
   }
 
@@ -77,36 +81,36 @@ public class InputFilePreprocessor {
 
   private void processRegularSource(ProcessingContext input) throws IOException {
     InputFile file = input.getFile();
-    String source = FileUtil.readFile(file);
+    String source = options.fileUtil().readFile(file);
+    boolean shouldMapHeaders = options.getHeaderMap().useSourceDirectories();
     boolean doIncompatibleStripping = source.contains("J2ObjCIncompatible");
-    if (!(Options.shouldMapHeaders() || doIncompatibleStripping)) {
+    if (!(shouldMapHeaders || doIncompatibleStripping)) {
       // No need to parse.
       return;
     }
-    org.eclipse.jdt.core.dom.CompilationUnit compilationUnit =
-        parser.parseWithoutBindings(file.getUnitName(), source);
-    if (compilationUnit == null) {
+    Parser.ParseResult parseResult = parser.parseWithoutBindings(file, source);
+    if (parseResult == null) {
       // The parser found and reported one or more errors.
       return;
     }
-    String qualifiedName = FileUtil.getQualifiedMainTypeName(file, compilationUnit);
-    if (Options.shouldMapHeaders()) {
-      Options.getHeaderMap().put(qualifiedName, input.getGenerationUnit().getOutputPath() + ".h");
+    String qualifiedName = parseResult.mainTypeName();
+    if (shouldMapHeaders) {
+      options.getHeaderMap().put(qualifiedName, input.getGenerationUnit().getOutputPath() + ".h");
     }
     if (doIncompatibleStripping) {
-      String newSource = J2ObjCIncompatibleStripper.strip(source, compilationUnit);
+      parseResult.stripIncompatibleSource();
       File strippedDir = getCreatedStrippedSourcesDir();
       String relativePath = qualifiedName.replace('.', File.separatorChar) + ".java";
       File strippedFile = new File(strippedDir, relativePath);
       Files.createParentDirs(strippedFile);
-      Files.write(newSource, strippedFile, Options.getCharset());
+      Files.write(parseResult.getSource(), strippedFile, options.fileUtil().getCharset());
       input.setFile(new RegularInputFile(strippedFile.getPath(), relativePath));
     }
   }
 
   private void processPackageInfoSource(ProcessingContext input) throws IOException {
     InputFile file = input.getFile();
-    String source = FileUtil.readFile(file);
+    String source = options.fileUtil().readFile(file);
     CompilationUnit compilationUnit =
         parser.parse(FileUtil.getMainTypeName(file), file.getUnitName(), source);
     if (compilationUnit != null) {
@@ -127,7 +131,7 @@ public class InputFilePreprocessor {
             ObjectiveCName.class.getCanonicalName())) {
           String key = unit.getPackage().getName().getFullyQualifiedName();
           String val = (String) ((SingleMemberAnnotation) annotation).getValue().getConstantValue();
-          Options.getPackagePrefixes().addPrefix(key, val);
+          options.getPackagePrefixes().addPrefix(key, val);
         }
       }
     }

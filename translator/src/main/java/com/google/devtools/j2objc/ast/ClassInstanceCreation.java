@@ -14,12 +14,11 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.ExecutablePair;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeMirror;
-import org.eclipse.jdt.core.dom.IMethodBinding;
 
 /**
  * Node type for constructing a new instance. (e.g. "new Foo()")
@@ -27,24 +26,26 @@ import org.eclipse.jdt.core.dom.IMethodBinding;
 public class ClassInstanceCreation extends Expression {
 
   private ExecutablePair method = ExecutablePair.NULL;
+  private TypeMirror varargsType = null;
   // Indicates that this expression leaves the created object with a retain
   // count of 1. (i.e. does not call autorelease)
   private boolean hasRetainedResult = false;
-  private ChildLink<Expression> expression = ChildLink.create(Expression.class, this);
+  private final ChildLink<Expression> expression = ChildLink.create(Expression.class, this);
   // Used by anonymous classes where we have two outer scopes, one for the class and one for the
   // superclass.
-  private ChildLink<Expression> superOuterArg = ChildLink.create(Expression.class, this);
-  private ChildList<Expression> captureArgs = ChildList.create(Expression.class, this);
-  private ChildLink<Type> type = ChildLink.create(Type.class, this);
-  private ChildList<Expression> arguments = ChildList.create(Expression.class, this);
-  private ChildLink<AnonymousClassDeclaration> anonymousClassDeclaration =
-      ChildLink.create(AnonymousClassDeclaration.class, this);
+  private final ChildLink<Expression> superOuterArg = ChildLink.create(Expression.class, this);
+  private final ChildList<Expression> captureArgs = ChildList.create(Expression.class, this);
+  private final ChildLink<Type> type = ChildLink.create(Type.class, this);
+  private final ChildList<Expression> arguments = ChildList.create(Expression.class, this);
+  private final ChildLink<TypeDeclaration> anonymousClassDeclaration =
+      ChildLink.create(TypeDeclaration.class, this);
 
   public ClassInstanceCreation() {}
 
   public ClassInstanceCreation(ClassInstanceCreation other) {
     super(other);
     method = other.getExecutablePair();
+    varargsType = other.getVarargsType();
     hasRetainedResult = other.hasRetainedResult();
     expression.copyFrom(other.getExpression());
     superOuterArg.copyFrom(other.getSuperOuterArg());
@@ -68,10 +69,6 @@ public class ClassInstanceCreation extends Expression {
     return Kind.CLASS_INSTANCE_CREATION;
   }
 
-  public IMethodBinding getMethodBinding() {
-    return (IMethodBinding) BindingConverter.unwrapTypeMirrorIntoBinding(method.type());
-  }
-
   public ExecutablePair getExecutablePair() {
     return method;
   }
@@ -85,11 +82,23 @@ public class ClassInstanceCreation extends Expression {
     return method.element();
   }
 
+  public ExecutableType getExecutableType() {
+    return method.type();
+  }
+
   @Override
   public TypeMirror getTypeMirror() {
-    //return method.element() != null ? method.element().getEnclosingElement().asType() : null;
     Type typeNode = type.get();
     return typeNode != null ? typeNode.getTypeMirror() : null;
+  }
+
+  public TypeMirror getVarargsType() {
+    return varargsType;
+  }
+
+  public ClassInstanceCreation setVarargsType(TypeMirror type) {
+    varargsType = type;
+    return this;
   }
 
   public boolean hasRetainedResult() {
@@ -149,12 +158,12 @@ public class ClassInstanceCreation extends Expression {
     return arguments;
   }
 
-  public AnonymousClassDeclaration getAnonymousClassDeclaration() {
+  public TypeDeclaration getAnonymousClassDeclaration() {
     return anonymousClassDeclaration.get();
   }
 
   public ClassInstanceCreation setAnonymousClassDeclaration(
-      AnonymousClassDeclaration newAnonymousClassDeclaration) {
+      TypeDeclaration newAnonymousClassDeclaration) {
     anonymousClassDeclaration.set(newAnonymousClassDeclaration);
     return this;
   }

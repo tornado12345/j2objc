@@ -16,16 +16,10 @@
 
 package com.google.devtools.j2objc.gen;
 
-import com.google.common.collect.Lists;
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.Options.MemoryManagementOption;
-
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import javax.tools.ToolProvider;
 
 /**
  * Tests for {@link ObjectiveCImplementationGenerator}.
@@ -54,7 +48,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
   }
 
   public void testHeaderFileMapping() throws IOException {
-    Options.setHeaderMappingFiles(Lists.newArrayList("testMappings.j2objc"));
+    options.getHeaderMap().setMappingFiles("testMappings.j2objc");
     loadHeaderMappings();
     addSourceFile("package unit.mapping.custom; public class Test { }",
         "unit/mapping/custom/Test.java");
@@ -184,9 +178,9 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
   }
 
   public void testNSObjectMessageSuperRename() throws IOException {
+    addSourceFile("public class SuperClass { int load() { return 1; }}", "SuperClass.java");
     String translation = translateSourceFile(
-        "public class Example { int load() { return 1; }} "
-        + "class SubClass extends Example { int load() { return super.load(); }}",
+        "class Example extends SuperClass { int load() { return super.load(); }}",
         "Example", "Example.m");
     assertTranslation(translation, "return [super load__];");
   }
@@ -222,9 +216,15 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
       "Color", "Color.m");
     assertTranslation(translation, "Color *Color_values_[3];");
     assertTranslation(translation, "@implementation Color");
-    assertTranslation(translation, "@\"RED\", @\"WHITE\", @\"BLUE\",");
     assertTranslation(translation, "for (int i = 0; i < 3; i++) {");
     assertTranslation(translation, "Color *e = Color_values_[i];");
+    assertTranslation(translation,
+        "Color_initWithNSString_withInt_(e, JreEnumConstantName(Color_class_(), i), i);");
+
+    // Check that correct enum names are in metadata.
+    assertTranslation(translation, "{ \"RED\", \"LColor;\"");
+    assertTranslation(translation, "{ \"WHITE\", \"LColor;\"");
+    assertTranslation(translation, "{ \"BLUE\", \"LColor;\"");
   }
 
   public void testEnumWithParameters() throws IOException {
@@ -268,7 +268,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
   }
 
   public void testEmptyInterfaceGenerationNoMetadata() throws IOException {
-    Options.setStripReflection(true);
+    options.setStripReflection(true);
     String translation = translateSourceFile(
         "package foo; public interface Compatible {}",
         "Compatible", "foo/Compatible.m");
@@ -390,7 +390,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertFalse(header.contains("isPackableWithTest_TypeEnum"));
     assertFalse(impl.contains("\n  return NO;\n  [super initWithTest_TypeEnum:arg$0]}"));
     assertTranslation(impl,
-        "Test_Field_$1_initWithTest_Type_withNSString_withInt_("
+        "Test_Field_1_initWithTest_Type_withNSString_withInt_("
         + "e, JreLoadEnum(Test_Type, STRING), @\"STRING\", 2);");
   }
 
@@ -409,7 +409,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
   }
 
   public void testARCAutoreleasePoolMethod() throws IOException {
-    Options.setMemoryManagementOption(MemoryManagementOption.ARC);
+    options.setMemoryManagementOption(MemoryManagementOption.ARC);
     String translation = translateSourceFile(
         "import com.google.j2objc.annotations.AutoreleasePool;"
         + "public class Test {"
@@ -528,7 +528,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
 
   public void testAddIgnoreDeprecationWarningsPragmaIfDeprecatedDeclarationsIsEnabled()
       throws IOException {
-    Options.enableDeprecatedDeclarations();
+    options.enableDeprecatedDeclarations();
 
     String translation = translateSourceFile(
             "class Test { public static String foo; }", "Test", "Test.m");
@@ -582,7 +582,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
     assertTranslatedLines(translation,
         "- (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state "
         + "objects:(__unsafe_unretained id *)stackbuf count:(NSUInteger)len {",
-        "return JreDefaultFastEnumeration(self, state, stackbuf, len);",
+        "return JreDefaultFastEnumeration(self, state, stackbuf);",
         "}");
   }
 
@@ -630,7 +630,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
 
   public void testPackageInfoAnnotationAndDoc() throws IOException {
     addSourcesToSourcepaths();
-    Options.setDocCommentsEnabled(true);
+    options.setDocCommentsEnabled(true);
     addSourceFile("package foo.annotations;\n"
         + "import java.lang.annotation.*;\n"
         + "@Retention(RetentionPolicy.RUNTIME)\n"
@@ -672,7 +672,7 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
 
   public void testPackageInfoDocNoAnnotation() throws IOException {
     addSourcesToSourcepaths();
-    Options.setDocCommentsEnabled(true);
+    options.setDocCommentsEnabled(true);
     String translation = translateSourceFile(
         "/** A package doc-comment. */\n"
         + "package foo.bar.mumble;",
@@ -724,34 +724,18 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
         + "import com.google.j2objc.annotations.ObjectiveCName;",
         "src/foo/bar/mumble/package-info.java");
 
-    List<String> compileArgs = Lists.newArrayList();
-    compileArgs.add("-classpath");
-    compileArgs.add(System.getProperty("java.class.path"));
-    compileArgs.add("-encoding");
-    compileArgs.add(Options.getCharset().name());
-    compileArgs.add("-source");
-    compileArgs.add("1.7");
-    compileArgs.add(tempDir.getAbsolutePath() + "/src/foo/bar/mumble/package-info.java");
-    org.eclipse.jdt.internal.compiler.batch.Main batchCompiler =
-        new org.eclipse.jdt.internal.compiler.batch.Main(
-            new PrintWriter(System.out), new PrintWriter(System.err),
-            false, Collections.emptyMap(), null);
-    batchCompiler.compile(compileArgs.toArray(new String[0]));
-    List<String> oldClassPathEntries = new ArrayList<String>(Options.getClassPathEntries());
-    Options.getClassPathEntries().add(tempDir.getAbsolutePath() + "/src/");
-    try {
-      String translation = translateSourceFile("package foo.bar.mumble;\n"
-          + "public class Test {}",
-          "foo.bar.mumble.Test", "foo/bar/mumble/Test.h");
-      assertTranslation(translation, "@interface FBMTest");
-      assertTranslation(translation, "@compatibility_alias FooBarMumbleTest FBMTest;");
-      translation = getTranslatedFile("foo/bar/mumble/Test.m");
-      assertTranslation(translation, "@implementation FBMTest");
-      assertNotInTranslation(translation, "FooBarMumbleTest");
-    } finally {
-      Options.getClassPathEntries().clear();
-      Options.getClassPathEntries().addAll(oldClassPathEntries);
-    }
+    ToolProvider.getSystemJavaCompiler().run(
+        null, null, System.err,
+        tempDir.getAbsolutePath() + "/src/foo/bar/mumble/package-info.java");
+    options.fileUtil().getClassPathEntries().add(tempDir.getAbsolutePath() + "/src/");
+    String translation = translateSourceFile("package foo.bar.mumble;\n"
+        + "public class Test {}",
+        "foo.bar.mumble.Test", "foo/bar/mumble/Test.h");
+    assertTranslation(translation, "@interface FBMTest");
+    assertTranslation(translation, "@compatibility_alias FooBarMumbleTest FBMTest;");
+    translation = getTranslatedFile("foo/bar/mumble/Test.m");
+    assertTranslation(translation, "@implementation FBMTest");
+    assertNotInTranslation(translation, "FooBarMumbleTest");
   }
 
   public void testPackageInfoPrefixMethod() throws IOException {
@@ -828,5 +812,14 @@ public class ObjectiveCImplementationGeneratorTest extends GenerationTest {
         + "@Outer(innerAnnotation=@Inner(name=\"Bar\")) class Foo {}}",
         "A", "A.m");
     assertTranslation(translation, "create_A_Outer(create_A_Inner(@\"Bar\"))");
+  }
+
+  public void testForwradDeclarationForPrivateAbstractDeclaration() throws IOException {
+    // We need a forward declaration of JavaLangInteger for the type narrowing declaration of get()
+    // in the private class B.
+    String translation = translateSourceFile(
+        "class Test { static class A <T> { T get() { return null; } }"
+        + "private static class B extends A<Integer> { } }", "Test", "Test.m");
+    assertTranslation(translation, "@class JavaLangInteger;");
   }
 }

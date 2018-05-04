@@ -15,9 +15,9 @@
 package com.google.devtools.j2objc.types;
 
 import com.google.common.base.Preconditions;
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.NameTable;
+import com.google.devtools.j2objc.util.TypeUtil;
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -37,9 +37,6 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVisitor;
-import org.eclipse.jdt.core.dom.IBinding;
-import org.eclipse.jdt.core.dom.IPackageBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
 
 /**
  * Element class for types created during translation.
@@ -52,21 +49,25 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
   private List<TypeMirror> interfaces = new ArrayList<>();
   private final NestingKind nestingKind;
   private final Name qualifiedName;
-  private final ITypeBinding binding = new Binding();
+  private final String header;
+  private final boolean isIosType;
 
   protected GeneratedTypeElement(
       String name, ElementKind kind, Element enclosingElement, TypeMirror superclass,
-      NestingKind nestingKind, boolean synthetic) {
+      NestingKind nestingKind, String header, boolean isIosType, boolean synthetic) {
     super(Preconditions.checkNotNull(name), checkElementKind(kind), enclosingElement, synthetic);
     this.superclass = superclass;
     this.nestingKind = nestingKind;
     qualifiedName = new NameImpl(getQualifiedPrefix(enclosingElement) + name);
+    this.header = header;
+    this.isIosType = isIosType;
   }
 
   public static GeneratedTypeElement mutableCopy(TypeElement element) {
     return new GeneratedTypeElement(
         element.getSimpleName().toString(), element.getKind(), element.getEnclosingElement(),
-        element.getSuperclass(), element.getNestingKind(), ElementUtil.isSynthetic(element));
+        element.getSuperclass(), element.getNestingKind(), ElementUtil.getHeader(element),
+        ElementUtil.isIosType(element), ElementUtil.isSynthetic(element));
   }
 
   private static GeneratedTypeElement newEmulatedType(
@@ -76,7 +77,7 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
     PackageElement packageElement = new GeneratedPackageElement(packageName);
     return new GeneratedTypeElement(
         qualifiedName.substring(idx + 1), kind, packageElement, superclass, NestingKind.TOP_LEVEL,
-        false);
+        null, false, false);
   }
 
   public static GeneratedTypeElement newEmulatedClass(String qualifiedName, TypeMirror superclass) {
@@ -87,10 +88,27 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
     return newEmulatedType(qualifiedName, ElementKind.INTERFACE, null);
   }
 
-  public static GeneratedTypeElement newPackageInfoClass(PackageElement pkgElem, Types typeEnv) {
+  public static GeneratedTypeElement newIosType(
+      String name, ElementKind kind, TypeElement superclass, String header) {
+    return new GeneratedTypeElement(
+        name, kind, null, superclass != null ? superclass.asType() : null, NestingKind.TOP_LEVEL,
+        header, true, false);
+  }
+
+  public static GeneratedTypeElement newIosClass(
+      String name, TypeElement superclass, String header) {
+    return newIosType(name, ElementKind.CLASS, superclass, header);
+  }
+
+  public static GeneratedTypeElement newIosInterface(String name, String header) {
+    return newIosType(name, ElementKind.INTERFACE, null, header);
+  }
+
+  public static GeneratedTypeElement newPackageInfoClass(
+      PackageElement pkgElem, TypeUtil typeUtil) {
     return (GeneratedTypeElement) new GeneratedTypeElement(
         NameTable.PACKAGE_INFO_CLASS_NAME, ElementKind.CLASS, pkgElem,
-        typeEnv.getJavaObjectElement().asType(), NestingKind.TOP_LEVEL, false)
+        typeUtil.getJavaObject().asType(), NestingKind.TOP_LEVEL, null, false, false)
         .addModifiers(Modifier.PRIVATE);
   }
 
@@ -122,6 +140,14 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
     return qualifiedName;
   }
 
+  public String getHeader() {
+    return header;
+  }
+
+  public boolean isIosType() {
+    return isIosType;
+  }
+
   @Override
   public TypeMirror getSuperclass() {
     return superclass;
@@ -135,6 +161,14 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
   @Override
   public List<? extends TypeMirror> getInterfaces() {
     return interfaces;
+  }
+
+  public List<? extends TypeMirror> getDirectSupertypes() {
+    List<TypeMirror> result = new ArrayList<>(interfaces);
+    if (superclass != null) {
+      result.add(0, superclass);  // Superclass must be first.
+    }
+    return result;
   }
 
   public void addInterface(TypeMirror t) {
@@ -155,19 +189,11 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
     return v.visitType(this, p);
   }
 
-  public ITypeBinding asTypeBinding() {
-    return binding;
-  }
-
   /**
    * The associated TypeMirror.
-   * TODO(kstanger): Make private when BindingConverter is removed.
+   * TODO(kstanger): Make private when javac conversion is complete.
    */
-  public class Mirror implements DeclaredType {
-
-    public ITypeBinding asTypeBinding() {
-      return GeneratedTypeElement.this.asTypeBinding();
-    }
+  public class Mirror extends AbstractTypeMirror implements DeclaredType {
 
     @Override
     public TypeKind getKind() {
@@ -181,8 +207,8 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
 
     @Override
     public TypeMirror getEnclosingType() {
-      Element enclosingElement = getEnclosingElement();
-      return enclosingElement == null ? null : enclosingElement.asType();
+      TypeElement declaringClass = ElementUtil.getDeclaringClass(GeneratedTypeElement.this);
+      return declaringClass == null ? null : declaringClass.asType();
     }
 
     @Override
@@ -209,88 +235,20 @@ public class GeneratedTypeElement extends GeneratedElement implements TypeElemen
     public <R, P> R accept(TypeVisitor<R, P> v, P p) {
       return v.visitDeclared(this, p);
     }
-  }
 
-  /**
-   * An associated ITypeBinding implementation.
-   */
-  public class Binding extends AbstractTypeBinding implements ITypeBinding {
-
-    public TypeElement asElement() {
-      return GeneratedTypeElement.this;
+    @Override
+    public boolean equals(Object obj) {
+      return obj instanceof Mirror && ((Mirror) obj).asElement().equals(GeneratedTypeElement.this);
     }
 
     @Override
-    public String getKey() {
-      return getName();
+    public int hashCode() {
+      return 31 * GeneratedTypeElement.this.hashCode();
     }
 
     @Override
-    public boolean isTopLevel() {
-      return nestingKind == NestingKind.TOP_LEVEL;
-    }
-
-    @Override
-    public boolean isEqualTo(IBinding binding) {
-      return binding == this;
-    }
-
-    @Override
-    public String getBinaryName() {
-      return getQualifiedName();
-    }
-
-    @Override
-    public String getName() {
-      return GeneratedTypeElement.this.getName();
-    }
-
-    @Override
-    public String getQualifiedName() {
+    public String toString() {
       return GeneratedTypeElement.this.getQualifiedName().toString();
-    }
-
-    @Override
-    public int getModifiers() {
-      return ElementUtil.fromModifierSet(GeneratedTypeElement.this.getModifiers());
-    }
-
-    @Override
-    public ITypeBinding getDeclaringClass() {
-      Element enclosing = getEnclosingElement();
-      while (enclosing != null && !ElementUtil.isTypeElement(enclosing)) {
-        enclosing = enclosing.getEnclosingElement();
-      }
-      return BindingConverter.unwrapTypeElement((TypeElement) enclosing);
-    }
-
-    @Override
-    public ITypeBinding getSuperclass() {
-      return BindingConverter.unwrapTypeMirrorIntoTypeBinding(superclass);
-    }
-
-    @Override
-    public ITypeBinding[] getInterfaces() {
-      ITypeBinding[] result = new ITypeBinding[interfaces.size()];
-      int i = 0;
-      for (TypeMirror m : interfaces) {
-        result[i++] = BindingConverter.unwrapTypeMirrorIntoTypeBinding(m);
-      }
-      return result;
-    }
-
-    @Override
-    public IPackageBinding getPackage() {
-      Element e = GeneratedTypeElement.this.getEnclosingElement();
-      while (e != null && e.getKind() != ElementKind.PACKAGE) {
-        e = e.getEnclosingElement();
-      }
-      return (IPackageBinding) BindingConverter.unwrapElement(e);
-    }
-
-    @Override
-    public boolean isAssignmentCompatible(ITypeBinding variableType) {
-      return variableType == this;
     }
   }
 }

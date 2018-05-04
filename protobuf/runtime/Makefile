@@ -23,6 +23,7 @@ include $(J2OBJC_ROOT)/make/j2objc_deps.mk
 include $(J2OBJC_ROOT)/java_deps/jars.mk
 
 SRCS = \
+  com/google/protobuf/AbstractMessage.m \
   com/google/protobuf/ByteString.m \
   com/google/protobuf/CodedInputStream.mm \
   com/google/protobuf/CodedOutputStream.mm \
@@ -33,9 +34,26 @@ SRCS = \
   com/google/protobuf/ExtensionRegistryLite.mm \
   com/google/protobuf/GeneratedMessage.mm \
   com/google/protobuf/InvalidProtocolBufferException.m \
+  com/google/protobuf/MapEntry.m \
+  com/google/protobuf/MapField.m \
   com/google/protobuf/ProtocolStringList.m \
   com/google/protobuf/RepeatedField.m \
   com/google/protobuf/WireFormat.mm
+
+# This headers list defines those headers included by all client code
+# of the ProtobufRuntime framework.
+STATIC_FRAMEWORK_PUBLIC_HEADERS = \
+  com/google/protobuf/AbstractMessage.h \
+  com/google/protobuf/ByteString.h \
+  com/google/protobuf/Descriptors.h \
+  com/google/protobuf/Extension.h \
+  com/google/protobuf/ExtensionLite.h \
+  com/google/protobuf/ExtensionRegistry.h \
+  com/google/protobuf/ExtensionRegistryLite.h \
+  com/google/protobuf/GeneratedMessage.h \
+  com/google/protobuf/InvalidProtocolBufferException.h \
+  com/google/protobuf/MapEntry.h \
+  com/google/protobuf/ProtocolStringList.h
 
 SRC_DIR = $(CURDIR)/src
 
@@ -43,16 +61,10 @@ DIST_JAR = $(DIST_JAR_DIR)/protobuf_runtime.jar
 
 OBJC_SOURCES_MANIFEST = $(BUILD_DIR)/objc_sources.mf
 
-ifndef PROTOBUF_ROOT_DIR
-ifndef IS_CLEAN_GOAL
-$(error PROTOBUF_ROOT_DIR not defined)
-endif
-endif
+$(call check_protobuf_dir)
 
-PROTO_PATH = $(PROTOBUF_ROOT_DIR)/src
 DESCRIPTOR_PROTO_RELATIVE = google/protobuf/descriptor.proto
-PROTOC = protoc
-DESCRIPTOR_PROTO = $(PROTO_PATH)/$(DESCRIPTOR_PROTO_RELATIVE)
+DESCRIPTOR_PROTO = $(PROTOBUF_INCLUDE_PATH)/$(DESCRIPTOR_PROTO_RELATIVE)
 DESCRIPTOR_PROTO_M = $(GEN_OBJC_DIR)/com/google/protobuf/DescriptorProtos.m
 DESCRIPTOR_PROTO_H = $(DESCRIPTOR_PROTO_M:.m=.h)
 
@@ -121,9 +133,8 @@ clean:
 	@rm -rf $(PROTOBUF_LICENSE_DIST)
 	@rm -rf $(STATIC_FRAMEWORK_DIR)
 
-DESCRIPTOR_PROTO_M_CMD = $(PROTOC) --plugin=protoc-gen-j2objc=$(PROTOC_PLUGIN) \
-  --proto_path=$(PROTO_PATH) --j2objc_out=$(GEN_OBJC_DIR)
-DESCRIPTOR_PROTO_M_CMD += $(DESCRIPTOR_PROTO)
+DESCRIPTOR_PROTO_M_CMD = $(PROTOBUF_PROTOC) --plugin=protoc-gen-j2objc=$(PROTOC_PLUGIN) \
+  --proto_path=$(PROTOBUF_INCLUDE_PATH) --j2objc_out=$(GEN_OBJC_DIR) $(DESCRIPTOR_PROTO)
 
 $(DESCRIPTOR_PROTO_M): $(DESCRIPTOR_PROTO) $(PROTOC_PLUGIN)
 	@mkdir -p $(@D)
@@ -137,7 +148,6 @@ $(ARCH_BUILD_DIR)/.dist_headers: $(HEADERS)
 	tar cf - -C src $(SOURCE_HEADERS) | tar xfpm - -C $(ARCH_INCLUDE_DIR)
 	tar cf - -C $(GEN_OBJC_DIR) $(GENERATED_HEADERS) | tar xfpm - -C $(ARCH_INCLUDE_DIR)
 	@touch $@
-
 
 RUNTIME_JAR = $(JAVA_DEPS_JAR_DIR)/$(PROTOBUF_JAR)
 

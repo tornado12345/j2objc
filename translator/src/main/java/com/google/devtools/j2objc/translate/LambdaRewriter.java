@@ -31,6 +31,7 @@ import com.google.devtools.j2objc.ast.MethodInvocation;
 import com.google.devtools.j2objc.ast.ReturnStatement;
 import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
+import com.google.devtools.j2objc.ast.SuperConstructorInvocation;
 import com.google.devtools.j2objc.ast.SuperMethodInvocation;
 import com.google.devtools.j2objc.ast.SuperMethodReference;
 import com.google.devtools.j2objc.ast.TreeNode;
@@ -48,13 +49,11 @@ import com.google.devtools.j2objc.util.TypeUtil;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
-import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeMirror;
 
 /**
@@ -75,9 +74,7 @@ public class LambdaRewriter extends UnitTreeVisitor {
 
     private final FunctionalExpression node;
     private final TypeElement lambdaType;
-    private final TypeMirror typeMirror;
-    private ExecutableElement functionalInterface;
-    private ExecutableType functionalInterfaceType;
+    private final ExecutablePair descriptor;
     private TypeDeclaration typeDecl;
     private GeneratedExecutableElement implElement;
     private MethodDeclaration implDecl;
@@ -86,29 +83,12 @@ public class LambdaRewriter extends UnitTreeVisitor {
     private RewriteContext(FunctionalExpression node) {
       this.node = node;
       lambdaType = node.getTypeElement();
-      typeMirror = node.getTypeMirror();
-      resolveFunctionalInterface();
+      descriptor = node.getDescriptor();
       createTypeDeclaration();
       createImplementation();
       createCreation();
       removeCastExpression();
       replaceNode();
-    }
-
-    public void resolveFunctionalInterface() {
-      typeUtil.visitTypeHierarchy(typeMirror, baseType -> {
-        TypeElement element = (TypeElement) baseType.asElement();
-        for (ExecutableElement method : ElementUtil.filterEnclosedElements(
-            element, ExecutableElement.class, ElementKind.METHOD)) {
-          if (!ElementUtil.isDefault(method) && !ElementUtil.isStatic(method)) {
-            functionalInterface = method;
-            functionalInterfaceType = typeUtil.asMemberOf(baseType, method);
-            return false;
-          }
-        }
-        return true;
-      });
-      assert functionalInterface != null : "Could not find functional interface for " + typeMirror;
     }
 
     private void createTypeDeclaration() {
@@ -118,9 +98,9 @@ public class LambdaRewriter extends UnitTreeVisitor {
     }
 
     private void createImplementation() {
-      String selector = nameTable.getMethodSelector(functionalInterface);
+      String selector = nameTable.getMethodSelector(descriptor.element());
       implElement = GeneratedExecutableElement.newMethodWithSelector(
-          selector, functionalInterface.getReturnType(), lambdaType);
+          selector, descriptor.element().getReturnType(), lambdaType);
       implDecl = new MethodDeclaration(implElement);
       typeDecl.addBodyDeclaration(implDecl);
     }
@@ -132,6 +112,8 @@ public class LambdaRewriter extends UnitTreeVisitor {
       // Add the implicit constructor to call.
       MethodDeclaration constructorDecl = new MethodDeclaration(constructorElement);
       constructorDecl.setBody(new Block());
+      constructorDecl.getBody().addStatement(new SuperConstructorInvocation(
+          new ExecutablePair(getObjectConstructor())));
       typeDecl.addBodyDeclaration(constructorDecl);
 
       creation = new ClassInstanceCreation(
@@ -167,7 +149,7 @@ public class LambdaRewriter extends UnitTreeVisitor {
 
     private Block asImplementationBlock(Expression expr) {
       Block block = new Block();
-      if (TypeUtil.isVoid(functionalInterface.getReturnType())) {
+      if (TypeUtil.isVoid(descriptor.element().getReturnType())) {
         block.addStatement(new ExpressionStatement(expr));
       } else {
         block.addStatement(new ReturnStatement(expr));
@@ -185,7 +167,7 @@ public class LambdaRewriter extends UnitTreeVisitor {
     }
 
     private Iterator<VariableElement> createParameters() {
-      List<? extends TypeMirror> paramTypes = functionalInterfaceType.getParameterTypes();
+      List<? extends TypeMirror> paramTypes = descriptor.type().getParameterTypes();
       List<VariableElement> params = new ArrayList<>(paramTypes.size());
       int i = 0;
       for (TypeMirror type : paramTypes) {
@@ -207,12 +189,13 @@ public class LambdaRewriter extends UnitTreeVisitor {
     private void rewriteCreationReference(CreationReference node) {
       TypeMirror creationType = node.getType().getTypeMirror();
       if (TypeUtil.isArray(creationType)) {
-        ArrayCreation creation = new ArrayCreation((ArrayType) creationType, typeEnv);
+        ArrayCreation creation = new ArrayCreation((ArrayType) creationType, typeUtil);
         forwardRemainingArgs(createParameters(), creation.getDimensions());
         setImplementationBody(creation);
       } else {
         ClassInstanceCreation creation =
-            new ClassInstanceCreation(node.getExecutablePair(), creationType);
+            new ClassInstanceCreation(new ExecutablePair(node.getExecutableElement()), creationType)
+            .setVarargsType(node.getVarargsType());
         forwardRemainingArgs(createParameters(), creation.getArguments());
         creation.setExpression(TreeUtil.remove(node.getCreationOuterArg()));
         TreeUtil.moveList(node.getCreationCaptureArgs(), creation.getCaptureArgs());
@@ -221,14 +204,14 @@ public class LambdaRewriter extends UnitTreeVisitor {
     }
 
     private void rewriteExpressionMethodReference(ExpressionMethodReference node) {
-      ExecutablePair method = node.getExecutablePair();
+      ExecutableElement method = node.getExecutableElement();
       Iterator<VariableElement> params = createParameters();
       Expression invocationTarget = null;
 
-      if (!ElementUtil.isStatic(method.element())) {
-        VariableElement targetField = captureInfo.getOuterField(lambdaType);
-        if (targetField != null) {
-          invocationTarget = new SimpleName(targetField);
+      if (!ElementUtil.isStatic(method)) {
+        VariableElement receiverField = captureInfo.getReceiverField(lambdaType);
+        if (receiverField != null) {
+          invocationTarget = new SimpleName(receiverField);
           creation.setExpression(TreeUtil.remove(node.getExpression()));
         } else {
           // The expression is actually a type name and doesn't evaluate to an invocable object.
@@ -236,43 +219,31 @@ public class LambdaRewriter extends UnitTreeVisitor {
         }
       }
 
-      MethodInvocation invocation = new MethodInvocation(method, invocationTarget);
+      MethodInvocation invocation =
+          new MethodInvocation(new ExecutablePair(method), invocationTarget)
+          .setVarargsType(node.getVarargsType());
       forwardRemainingArgs(params, invocation.getArguments());
       setImplementationBody(invocation);
     }
 
     private void rewriteSuperMethodReference(SuperMethodReference node) {
-      SuperMethodInvocation invocation = new SuperMethodInvocation(node.getExecutablePair());
+      SuperMethodInvocation invocation =
+          new SuperMethodInvocation(new ExecutablePair(node.getExecutableElement()))
+          .setVarargsType(node.getVarargsType());
       invocation.setReceiver(TreeUtil.remove(node.getReceiver()));
       forwardRemainingArgs(createParameters(), invocation.getArguments());
       setImplementationBody(invocation);
     }
 
     private void rewriteTypeMethodReference(TypeMethodReference node) {
-      ExecutablePair method = getExecutablePair(node);
+      ExecutableElement method = node.getExecutableElement();
       Iterator<VariableElement> params = createParameters();
       MethodInvocation invocation = new MethodInvocation(
-          method, ElementUtil.isStatic(method.element()) ? null : new SimpleName(params.next()));
+          new ExecutablePair(method),
+          ElementUtil.isStatic(method) ? null : new SimpleName(params.next()))
+          .setVarargsType(node.getVarargsType());
       forwardRemainingArgs(params, invocation.getArguments());
       setImplementationBody(invocation);
-    }
-
-    private ExecutablePair getExecutablePair(TypeMethodReference node) {
-      if (!TypeUtil.isArray(node.getType().getTypeMirror())) {
-        return node.getExecutablePair();
-      }
-      // JDT does not provide the correct method on array types, so we find it from
-      // java.lang.Object.
-      String name = node.getName().getIdentifier();
-      int numParams = functionalInterface.getParameters().size() - 1;
-      TypeElement javaObject = typeEnv.getJavaObjectElement();
-      for (ExecutableElement method : ElementUtil.getMethods(javaObject)) {
-        if (ElementUtil.getName(method).equals(name)
-            && method.getParameters().size() == numParams) {
-          return new ExecutablePair(method);
-        }
-      }
-      throw new AssertionError("Can't find method element for method: " + name);
     }
   }
 
@@ -312,5 +283,14 @@ public class LambdaRewriter extends UnitTreeVisitor {
       i--;
     }
     return sb.reverse().toString();
+  }
+
+  private ExecutableElement getObjectConstructor() {
+    for (ExecutableElement constructor : ElementUtil.getConstructors(typeUtil.getJavaObject())) {
+      if (constructor.getParameters().isEmpty()) {
+        return constructor;
+      }
+    }
+    throw new AssertionError("Can't find constructor for java.lang.Object.");
   }
 }

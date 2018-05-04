@@ -14,13 +14,7 @@
 
 package com.google.devtools.j2objc.types;
 
-import java.lang.annotation.Annotation;
-import java.lang.reflect.Array;
-import java.util.Collections;
-import java.util.List;
-import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.type.TypeKind;
-import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVisitor;
 
 /**
@@ -28,7 +22,7 @@ import javax.lang.model.type.TypeVisitor;
  *
  * @author Nathan Braswell
  */
-public class NativeType implements TypeMirror {
+public class NativeType extends AbstractTypeMirror {
 
   private final String name;
 
@@ -36,25 +30,13 @@ public class NativeType implements TypeMirror {
     this.name = name;
   }
 
-  @Override
-  public List<? extends AnnotationMirror> getAnnotationMirrors() {
-    return Collections.emptyList();
+  public String getName() {
+    return name;
   }
 
   @Override
   public String toString() {
     return name;
-  }
-
-  @Override
-  public <A extends Annotation> A getAnnotation(Class<A> annotationType) {
-    return null;
-  }
-
-  @Override
-  @SuppressWarnings("unchecked")
-  public <A extends Annotation> A[] getAnnotationsByType(Class<A> annotationType) {
-    return (A[]) Array.newInstance(annotationType, 0);
   }
 
   @Override
@@ -65,5 +47,15 @@ public class NativeType implements TypeMirror {
   @Override
   public <R, P> R accept(TypeVisitor<R, P> v, P p) {
     return v.visitUnknown(this, p);
+  }
+
+  @Override
+  public boolean equals(Object other) {
+    return other instanceof NativeType && ((NativeType) other).getName().equals(name);
+  }
+
+  @Override
+  public int hashCode() {
+    return name.hashCode();
   }
 }

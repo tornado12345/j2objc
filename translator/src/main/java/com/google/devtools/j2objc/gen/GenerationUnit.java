@@ -21,14 +21,12 @@ import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.Javadoc;
 import com.google.devtools.j2objc.ast.NativeDeclaration;
-import com.google.devtools.j2objc.ast.PackageDeclaration;
 import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.file.InputFile;
-
+import com.google.devtools.j2objc.util.ElementUtil;
 import java.io.File;
 import java.util.Collection;
 import java.util.TreeMap;
-
 import javax.annotation.Nullable;
 
 /**
@@ -42,7 +40,7 @@ import javax.annotation.Nullable;
 public class GenerationUnit {
 
   private String outputPath;
-  private int numUnits;
+  private int numUnits = 0;
   private int receivedUnits = 0;
   // It is useful for the generated code to be consistent. Therefore, the
   // ordering of generated code within this unit should be consistent. For this
@@ -57,6 +55,8 @@ public class GenerationUnit {
   private State state = State.ACTIVE;
   private boolean hasIncompleteProtocol = false;
   private boolean hasIncompleteImplementation = false;
+  private boolean hasNullabilityAnnotations = false;
+  private final Options options;
 
   private enum State {
     ACTIVE,   // Initial state, still collecting CompilationUnits.
@@ -65,27 +65,34 @@ public class GenerationUnit {
   }
 
   @VisibleForTesting
-  public GenerationUnit(String sourceName, int numUnits) {
+  public GenerationUnit(String sourceName, Options options) {
     this.sourceName = sourceName;
-    this.numUnits = numUnits;
+    this.options = options;
   }
 
-  public static GenerationUnit newSingleFileUnit(InputFile file) {
-    GenerationUnit unit = new GenerationUnit(file.getPath(), 1);
-    if (Options.useSourceDirectories()) {
-      String outputPath = file.getUnitName();
-      outputPath = outputPath.substring(0, outputPath.lastIndexOf(".java"));
-      unit.outputPath = outputPath;
+  public static GenerationUnit newSingleExtractedJarEntryUnit(
+      InputFile file, String sourceName, Options options) {
+    GenerationUnit unit = new GenerationUnit(sourceName, options);
+    if (options.getHeaderMap().useSourceDirectories()) {
+      unit.useSourceDirectoryForOutput(file);
     }
     return unit;
   }
 
-  public static GenerationUnit newCombinedJarUnit(String filename, int numInputs) {
+  public static GenerationUnit newSingleFileUnit(InputFile file, Options options) {
+    GenerationUnit unit = new GenerationUnit(file.getOriginalLocation(), options);
+    if (options.getHeaderMap().useSourceDirectories()) {
+      unit.useSourceDirectoryForOutput(file);
+    }
+    return unit;
+  }
+
+  public static GenerationUnit newCombinedJarUnit(String filename, Options options) {
     String outputPath = filename;
     if (outputPath.lastIndexOf(File.separatorChar) < outputPath.lastIndexOf(".")) {
       outputPath = outputPath.substring(0, outputPath.lastIndexOf("."));
     }
-    GenerationUnit unit = new GenerationUnit(filename, numInputs);
+    GenerationUnit unit = new GenerationUnit(filename, options);
     unit.outputPath = outputPath;
     return unit;
   }
@@ -106,6 +113,10 @@ public class GenerationUnit {
     return hasIncompleteImplementation;
   }
 
+  public boolean hasNullabilityAnnotations() {
+    return hasNullabilityAnnotations;
+  }
+
   public Collection<String> getJavadocBlocks() {
     return javadocBlocks.values();
   }
@@ -124,8 +135,7 @@ public class GenerationUnit {
 
   /**
    * Increments the number of inputs for this GenerationUnit. This is called
-   * from the annotation preprocessor when an annotation processor has created
-   * a new source file.
+   * for each new ProcessingContext created with this GenerationUnit.
    */
   public void incrementInputs() {
     numUnits++;
@@ -151,19 +161,24 @@ public class GenerationUnit {
       // be compiled and translated as a single task. When we support
       // parallelization, each parallel task needs to be constrained this way.
       assert receivedUnits == 1;
-      outputPath = getDefaultOutputPath(unit);
+      outputPath = options.getHeaderMap().getOutputPath(unit);
     }
 
     hasIncompleteProtocol = hasIncompleteProtocol || unit.hasIncompleteProtocol();
     hasIncompleteImplementation = hasIncompleteImplementation || unit.hasIncompleteImplementation();
+    if (unit.hasNullabilityAnnotations()) {
+      hasNullabilityAnnotations = true;
+    }
 
     String qualifiedMainType = TreeUtil.getQualifiedMainTypeName(unit);
-
     addPackageJavadoc(unit, qualifiedMainType);
     addNativeBlocks(unit, qualifiedMainType);
 
     for (AbstractTypeDeclaration type : unit.getTypes()) {
       generatedTypes.put(qualifiedMainType, GeneratedType.fromTypeDeclaration(type));
+      if (ElementUtil.isEnum(type.getTypeElement())) {
+        hasNullabilityAnnotations = true;
+      }
     }
   }
 
@@ -201,23 +216,14 @@ public class GenerationUnit {
     }
   }
 
-  public boolean isFullyParsed() {
-    return receivedUnits == numUnits;
+  private void useSourceDirectoryForOutput(InputFile sourceFile) {
+    String sourceDir = sourceFile.getUnitName();
+    sourceDir = sourceDir.substring(0, sourceDir.lastIndexOf(".java"));
+    outputPath = sourceDir;
   }
 
-  /**
-   * Gets the output path if there isn't one already.
-   * For example, foo/bar/Mumble.java translates to $(OUTPUT_DIR)/foo/bar/Mumble.
-   * If --no-package-directories is specified, though, the output file is $(OUTPUT_DIR)/Mumble.
-   */
-  private static String getDefaultOutputPath(CompilationUnit unit) {
-    String path = unit.getMainTypeName();
-    PackageDeclaration pkg = unit.getPackage();
-    if (Options.usePackageDirectories() && !pkg.isDefaultPackage()) {
-      path = pkg.getName().getFullyQualifiedName().replace('.', File.separatorChar)
-          + File.separatorChar + path;
-    }
-    return path;
+  public boolean isFullyParsed() {
+    return receivedUnits == numUnits;
   }
 
   public void failed() {
@@ -245,5 +251,9 @@ public class GenerationUnit {
     }
     sb.append(generatedTypes);
     return sb.toString();
+  }
+
+  public Options options() {
+    return options;
   }
 }

@@ -64,6 +64,10 @@ EnumGenerator::EnumGenerator(const EnumDescriptor* descriptor)
 EnumGenerator::~EnumGenerator() {
 }
 
+void EnumGenerator::CollectSourceImports(std::set<string>* imports) const {
+  imports->insert("java/lang/IllegalArgumentException.h");
+}
+
 void EnumGenerator::GenerateHeader(io::Printer* printer) {
   printer->Print(
     "\ntypedef NS_ENUM(NSUInteger, $classname$) {\n",
@@ -159,7 +163,7 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       printer->Print("\n     ");
       row_chars = 5;
     };
-    printer->Print(" @\"$name$\",", "name", canonical_values_[i]->name());
+    printer->Print(" @\"$name$\",", "name", name);
     row_chars += added_chars;
   }
   printer->Print("\n"
@@ -233,7 +237,8 @@ void EnumGenerator::GenerateSource(io::Printer* printer) {
       "      return e;\n"
       "    }\n"
       "  }\n"
-      "  @throw [[[JavaLangIllegalArgumentException alloc] initWithNSString:name] autorelease];\n"
+      "  @throw create_JavaLangIllegalArgumentException_initWithNSString_("
+          "name);\n"
       "}\n"
       "\n"
       "$classname$ *$classname$_valueOfWithInt_(jint value) {\n"

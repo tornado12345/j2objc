@@ -17,7 +17,6 @@
 package com.google.devtools.j2objc.gen;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 
 import java.io.IOException;
 
@@ -32,7 +31,7 @@ public class JavadocGeneratorTest extends GenerationTest {
   @Override
   protected void setUp() throws IOException {
     super.setUp();
-    Options.setDocCommentsEnabled(true);
+    options.setDocCommentsEnabled(true);
   }
 
   public void testBasicDocComments() throws IOException {
@@ -84,6 +83,7 @@ public class JavadocGeneratorTest extends GenerationTest {
         + "   * @param <T> the type to be returned.\n"
         + "   */ T test() { return null; }}", "Test", "Test.h");
     assertTranslation(translation, "@brief Class javadoc for Test.");
+    assertTranslation(translation, "@brief Method javadoc.");
     assertNotInTranslation(translation, "@param");
     assertNotInTranslation(translation, "<T>");
   }
@@ -96,7 +96,7 @@ public class JavadocGeneratorTest extends GenerationTest {
         + " * <pre>{\"query\":\"Pizza\",\"locations\":[94043,90210]}</pre>\n"
         + " * or maybe <pre>{\"query\":\"Fuel\",\"locations\":[96011]}</pre>\n"
         + " */ class Test {}", "Test", "Test.h");
-    assertTranslatedLines(translation,
+    assertTranslatedSegments(translation,
         "@brief Comment fragment from JSONObject.java.",
         "Encodes this object as a compact JSON string, such as:",
         "@code",
@@ -227,11 +227,22 @@ public class JavadocGeneratorTest extends GenerationTest {
   public void testSeeTag() throws IOException {
     String translation = translateSourceFile(
         "/** Class javadoc for Test.\n"
-        + " * @see {@link http://developers.facebook.com/docs/reference/javascript/FB.init/}\n"
+        + " * @see <a href=\"http://developers.facebook.com/docs/reference/javascript/FB.init/\">"
+        + "FB.init</a>\n"
         + " */ class Test {}", "Test", "Test.h");
     assertTranslation(translation, "@brief Class javadoc for Test.");
     assertTranslation(translation,
         "- seealso: "
-        + "<code>http://developers.facebook.com/docs/reference/javascript/FB.init/</code>");
+        + "<a href=\"http://developers.facebook.com/docs/reference/javascript/FB.init/\">");
+  }
+
+  // Verify that unknown tags are not printed.
+  public void testUnknownTag() throws IOException {
+    String translation = translateSourceFile(
+        "/** Class javadoc for Test.\n"
+        + " * @jls 11.2 Some JLS reference.\n"
+        + " */ class Test {}", "Test", "Test.h");
+    assertTranslation(translation, "@brief Class javadoc for Test.");
+    assertNotInTranslation(translation, "11.2 Some JLS reference.");
   }
 }

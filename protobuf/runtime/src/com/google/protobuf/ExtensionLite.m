@@ -38,8 +38,10 @@
 
 - (instancetype)initWithFieldData:(CGPFieldData *)data {
   if (self = [super init]) {
-    fieldDescriptor_ = [[CGPFieldDescriptor alloc] initWithData:data];
-    CGPFieldFixDefaultValue(fieldDescriptor_);
+    Class msgClass = objc_getClass(data->containingType);
+    NSCAssert(msgClass != nil, @"Containing message type not found.");
+    CGPDescriptor *containingType = [msgClass performSelector:@selector(getDescriptor)];
+    fieldDescriptor_ = [[CGPFieldDescriptor alloc] initWithData:data containingType:containingType];
   }
   return self;
 }

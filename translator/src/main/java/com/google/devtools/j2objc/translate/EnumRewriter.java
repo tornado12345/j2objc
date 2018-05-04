@@ -14,9 +14,9 @@
 
 package com.google.devtools.j2objc.translate;
 
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.Assignment;
 import com.google.devtools.j2objc.ast.Block;
+import com.google.devtools.j2objc.ast.CastExpression;
 import com.google.devtools.j2objc.ast.ClassInstanceCreation;
 import com.google.devtools.j2objc.ast.CommaExpression;
 import com.google.devtools.j2objc.ast.CompilationUnit;
@@ -32,6 +32,7 @@ import com.google.devtools.j2objc.ast.NativeDeclaration;
 import com.google.devtools.j2objc.ast.NativeExpression;
 import com.google.devtools.j2objc.ast.NativeStatement;
 import com.google.devtools.j2objc.ast.NumberLiteral;
+import com.google.devtools.j2objc.ast.ParenthesizedExpression;
 import com.google.devtools.j2objc.ast.PostfixExpression;
 import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
@@ -48,6 +49,7 @@ import com.google.devtools.j2objc.types.GeneratedTypeElement;
 import com.google.devtools.j2objc.types.GeneratedVariableElement;
 import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.NameTable;
+import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.devtools.j2objc.util.UnicodeUtils;
 import com.google.j2objc.annotations.ObjectiveCName;
 import java.lang.reflect.Modifier;
@@ -81,7 +83,7 @@ public class EnumRewriter extends UnitTreeVisitor {
     if (node.getEnumConstants().isEmpty()) {
       return;
     }
-    if (Options.useARC()) {
+    if (options.useARC()) {
       addArcInitialization(node);
     } else {
       if (isSimpleEnum(node)) {
@@ -121,29 +123,34 @@ public class EnumRewriter extends UnitTreeVisitor {
     stmts.add(new NativeStatement(UnicodeUtils.format(
         "size_t allocSize = %s * objSize;", constants.size())));
     stmts.add(new NativeStatement("uintptr_t ptr = (uintptr_t)calloc(allocSize, 1);"));
-    VariableElement localEnum =
-        GeneratedVariableElement.newLocalVar("e", typeEnv.getIdTypeMirror(), null);
+    VariableElement localEnum = GeneratedVariableElement.newLocalVar("e", TypeUtil.ID_TYPE, null);
     stmts.add(new VariableDeclarationStatement(localEnum, null));
 
-    StringBuffer sb = new StringBuffer("id names[] = {\n  ");
-    for (EnumConstantDeclaration constant : node.getEnumConstants()) {
-      sb.append("@\"" + constant.getName() + "\", ");
+    // Create a local array of enum names only if reflection is stripped but
+    // enum constants are not. For non-stripped classes, enum names are now
+    // retrieved from metadata, to avoid duplicates.
+    boolean useNamesArray = options.stripReflection() && !options.stripEnumConstants();
+    if (useNamesArray) {
+      StringBuilder sb = new StringBuilder("id names[] = {\n  ");
+      for (EnumConstantDeclaration constant : constants) {
+        sb.append("@\"" + ElementUtil.getName(constant.getVariableElement()) + "\", ");
+      }
+      sb.append("\n};");
+      stmts.add(new NativeStatement(sb.toString()));
     }
-    sb.append("\n};");
-    stmts.add(new NativeStatement(sb.toString()));
 
-    TypeMirror intType = typeEnv.resolveJavaTypeMirror("int");
+    TypeMirror intType = typeUtil.getInt();
     GeneratedVariableElement loopCounterElement =
         GeneratedVariableElement.newLocalVar("i", intType, TreeUtil.getEnclosingElement(node));
     VariableDeclarationExpression loopCounter =
         new VariableDeclarationExpression().setType(Type.newType(loopCounterElement.asType()))
             .addFragment(new VariableDeclarationFragment(
-                loopCounterElement, TreeUtil.newLiteral(0, typeEnv)));
+                loopCounterElement, TreeUtil.newLiteral(0, typeUtil)));
     Expression loopTest = new InfixExpression()
         .setOperator(InfixExpression.Operator.LESS)
         .setTypeMirror(intType)
         .addOperand(new SimpleName(loopCounterElement))
-        .addOperand(TreeUtil.newLiteral(constants.size(), typeEnv));
+        .addOperand(TreeUtil.newLiteral(constants.size(), typeUtil));
     Expression loopUpdater =
         new PostfixExpression(loopCounterElement, PostfixExpression.Operator.INCREMENT);
     Block loopBody = new Block();
@@ -153,10 +160,19 @@ public class EnumRewriter extends UnitTreeVisitor {
         .addUpdater(loopUpdater)
         .setBody(loopBody));
     String enumClassName = nameTable.getFullName(node.getTypeElement());
-    loopBody.addStatement(new NativeStatement("(" + enumClassName
-        + "_values_[i] = e = objc_constructInstance(self, (void *)ptr), ptr += objSize);"));
-    loopBody.addStatement(new NativeStatement(enumClassName
-        + "_initWithNSString_withInt_(e, names[i], i);"));
+    loopBody.addStatement(new NativeStatement("((void)(" + enumClassName
+        + "_values_[i] = e = objc_constructInstance(self, (void *)ptr)), ptr += objSize);"));
+    if (useNamesArray) {
+      loopBody.addStatement(new NativeStatement(enumClassName
+          + "_initWithNSString_withInt_(e, names[i], i);"));
+    } else if (options.stripEnumConstants()){
+      loopBody.addStatement(new NativeStatement(enumClassName
+          + "_initWithNSString_withInt_(e, JAVA_LANG_ENUM_NAME_STRIPPED, i);"));
+    } else {
+      loopBody.addStatement(new NativeStatement(enumClassName
+          + "_initWithNSString_withInt_(e, JreEnumConstantName(" + enumClassName
+          + "_class_(), i), i);"));
+    }
    }
 
   private void addNonArcInitialization(EnumDeclaration node) {
@@ -164,9 +180,8 @@ public class EnumRewriter extends UnitTreeVisitor {
     int baseTypeCount = 0;
     List<Statement> sizeStatements = new ArrayList<>();
     List<Statement> initStatements = new ArrayList<>();
-    TypeMirror voidType = typeUtil.getVoidType();
-    VariableElement localEnum =
-        GeneratedVariableElement.newLocalVar("e", typeEnv.getIdTypeMirror(), null);
+    TypeMirror voidType = typeUtil.getVoid();
+    VariableElement localEnum = GeneratedVariableElement.newLocalVar("e", TypeUtil.ID_TYPE, null);
 
     int i = 0;
     for (EnumConstantDeclaration constant : node.getEnumConstants()) {
@@ -186,11 +201,15 @@ public class EnumRewriter extends UnitTreeVisitor {
         baseTypeCount++;
       }
 
-      initStatements.add(new ExpressionStatement(new CommaExpression(
-          new Assignment(new SimpleName(varElement), new Assignment(
-          new SimpleName(localEnum), new NativeExpression(UnicodeUtils.format(
-              "objc_constructInstance(%s, (void *)ptr)", classExpr), type.asType()))),
-          new NativeExpression("ptr += " + sizeName, voidType))));
+      initStatements.add(new ExpressionStatement(
+          new CommaExpression(
+              new CastExpression(voidType, new ParenthesizedExpression(
+                  new Assignment(new SimpleName(varElement),
+                  new Assignment(new SimpleName(localEnum),
+                  new NativeExpression(
+                      UnicodeUtils.format("objc_constructInstance(%s, (void *)ptr)", classExpr),
+                      type.asType()))))),
+              new NativeExpression("ptr += " + sizeName, voidType))));
       String initName = nameTable.getFullFunctionName(methodElement);
       FunctionElement initElement = new FunctionElement(initName, voidType, valueType)
           .addParameters(valueType.asType())
@@ -198,8 +217,8 @@ public class EnumRewriter extends UnitTreeVisitor {
       FunctionInvocation initFunc = new FunctionInvocation(initElement, voidType);
       initFunc.addArgument(new SimpleName(localEnum));
       TreeUtil.copyList(constant.getArguments(), initFunc.getArguments());
-      initFunc.addArgument(new StringLiteral(varName, typeEnv));
-      initFunc.addArgument(new NumberLiteral(i++, typeEnv));
+      initFunc.addArgument(new StringLiteral(varName, typeUtil));
+      initFunc.addArgument(new NumberLiteral(i++, typeUtil));
       initStatements.add(new ExpressionStatement(initFunc));
     }
 
@@ -220,14 +239,20 @@ public class EnumRewriter extends UnitTreeVisitor {
   // ARC does not allow using "objc_constructInstance" so ARC code doesn't get
   // the shared allocation optimization.
   private void addArcInitialization(EnumDeclaration node) {
+    String enumClassName = nameTable.getFullName(node.getTypeElement());
     List<Statement> stmts = node.getClassInitStatements().subList(0, 0);
     int i = 0;
     for (EnumConstantDeclaration constant : node.getEnumConstants()) {
       VariableElement varElement = constant.getVariableElement();
       ClassInstanceCreation creation = new ClassInstanceCreation(constant.getExecutablePair());
       TreeUtil.copyList(constant.getArguments(), creation.getArguments());
-      creation.addArgument(new StringLiteral(ElementUtil.getName(varElement), typeEnv));
-      creation.addArgument(new NumberLiteral(i++, typeEnv));
+      Expression constName = options.stripEnumConstants()
+          ? new StringLiteral("JAVA_LANG_ENUM_NAME_STRIPPED", typeUtil)
+          : new NativeExpression(
+            UnicodeUtils.format("JreEnumConstantName(%s_class_(), %d)", enumClassName, i),
+            typeUtil.getJavaString().asType());
+      creation.addArgument(constName);
+      creation.addArgument(new NumberLiteral(i++, typeUtil));
       creation.setHasRetainedResult(true);
       stmts.add(new ExpressionStatement(new Assignment(new SimpleName(varElement), creation)));
     }
@@ -274,18 +299,24 @@ public class EnumRewriter extends UnitTreeVisitor {
     methodDecl.setBody(body);
 
     StringBuilder impl = new StringBuilder();
-    if (numConstants > 0) {
+    if (options.stripEnumConstants()) {
       impl.append(UnicodeUtils.format(
-          "  for (int i = 0; i < %s; i++) {\n"
-          + "    %s *e = %s_values_[i];\n"
-          + "    if ([name isEqual:[e name]]) {\n"
-          + "      return e;\n"
-          + "    }\n"
-          + "  }\n", numConstants, typeName, typeName));
+          "  @throw create_JavaLangError_initWithNSString_(@\"Enum.valueOf(String) "
+          + "called on %s enum with stripped constant names\");", typeName));
+    } else {
+      if (numConstants > 0) {
+        impl.append(UnicodeUtils.format(
+            "  for (int i = 0; i < %s; i++) {\n"
+            + "    %s *e = %s_values_[i];\n"
+            + "    if ([name isEqual:[e name]]) {\n"
+            + "      return e;\n"
+            + "    }\n"
+            + "  }\n", numConstants, typeName, typeName));
+      }
+      impl.append(
+          "  @throw create_JavaLangIllegalArgumentException_initWithNSString_(name);\n"
+          + "  return nil;");
     }
-    impl.append(
-        "  @throw create_JavaLangIllegalArgumentException_initWithNSString_(name);\n"
-        + "  return nil;");
 
     body.addStatement(new NativeStatement(impl.toString()));
     node.addBodyDeclaration(methodDecl);
@@ -294,35 +325,17 @@ public class EnumRewriter extends UnitTreeVisitor {
   private void addExtraNativeDecls(EnumDeclaration node) {
     String typeName = nameTable.getFullName(node.getTypeElement());
     int numConstants = node.getEnumConstants().size();
-    boolean swiftFriendly = Options.swiftFriendly();
-
-    StringBuilder header = new StringBuilder();
-    StringBuilder implementation = new StringBuilder();
-
-    header.append("- (id)copyWithZone:(NSZone *)zone;\n");
-
-    // Append enum type suffix.
-    String nativeName = NameTable.getNativeEnumName(typeName);
 
     // The native type is not declared for an empty enum.
-    if (swiftFriendly && numConstants > 0) {
-      header.append(UnicodeUtils.format("- (%s)toNSEnum;\n", nativeName));
-    }
-
-    if (swiftFriendly && numConstants > 0) {
-      implementation.append(UnicodeUtils.format(
-          "- (%s)toNSEnum {\n"
+    if (options.swiftFriendly() && numConstants > 0) {
+      String nativeName = NameTable.getNativeEnumName(typeName);
+      node.addBodyDeclaration(NativeDeclaration.newInnerDeclaration(
+          UnicodeUtils.format("- (%s)toNSEnum;\n", nativeName),
+          UnicodeUtils.format(
+              "- (%s)toNSEnum {\n"
               + "  return (%s)[self ordinal];\n"
-              + "}\n\n", nativeName, nativeName));
+              + "}\n\n", nativeName, nativeName)));
     }
-
-    // Enum constants needs to implement NSCopying. Being singletons, they can
-    // just return self. No need to increment the retain count because enum
-    // values are never deallocated.
-    implementation.append("- (id)copyWithZone:(NSZone *)zone {\n  return self;\n}\n");
-
-    node.addBodyDeclaration(NativeDeclaration.newInnerDeclaration(
-        header.toString(), implementation.toString()));
 
     StringBuilder outerHeader = new StringBuilder();
     StringBuilder outerImpl = new StringBuilder();
@@ -353,7 +366,13 @@ public class EnumRewriter extends UnitTreeVisitor {
     outerDecl.addImplementationImportType(
         GeneratedTypeElement.newEmulatedClass(
             "java.lang.IllegalArgumentException",
-            typeEnv.resolveJavaTypeMirror("java.lang.RuntimeException")).asType());
+            typeUtil.resolveJavaType("java.lang.RuntimeException").asType()).asType());
+    if (options.stripEnumConstants()) {
+      outerDecl.addImplementationImportType(
+          GeneratedTypeElement.newEmulatedClass(
+              "java.lang.Error",
+              typeUtil.getJavaThrowable().asType()).asType());
+    }
     node.addBodyDeclaration(outerDecl);
   }
 }

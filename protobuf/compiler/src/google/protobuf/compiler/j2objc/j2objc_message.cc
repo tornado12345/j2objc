@@ -40,6 +40,7 @@
 #include "google/protobuf/compiler/j2objc/j2objc_enum.h"
 #include "google/protobuf/compiler/j2objc/j2objc_extension.h"
 #include "google/protobuf/compiler/j2objc/j2objc_helpers.h"
+#include "google/protobuf/compiler/j2objc/j2objc_oneof.h"
 
 namespace google {
 namespace protobuf {
@@ -48,35 +49,17 @@ namespace j2objc {
 
 namespace {
 
-  struct FieldOrderingByNumber {
-    inline bool operator()(const FieldDescriptor* a,
-                           const FieldDescriptor* b) const {
-      return a->number() < b->number();
-    }
-  };
-
-  // Sort the fields of the given Descriptor by number into a new[]'d array
-  // and return it.
-  const FieldDescriptor** SortFieldsByNumber(const Descriptor* descriptor) {
-    const FieldDescriptor** fields =
-        new const FieldDescriptor*[descriptor->field_count()];
-    for (int i = 0; i < descriptor->field_count(); i++) {
-      fields[i] = descriptor->field(i);
-    }
-    sort(fields, fields + descriptor->field_count(), FieldOrderingByNumber());
-    return fields;
+string GetMessageFlags(const Descriptor *descriptor) {
+  std::vector<string> flags;
+  if (descriptor->extension_range_count() > 0) {
+    flags.push_back("CGPMessageFlagExtendable");
   }
-
-  string GetMessageFlags(const Descriptor *descriptor) {
-    vector<string> flags;
-    if (descriptor->extension_range_count() > 0) {
-      flags.push_back("CGPMessageFlagExtendable");
-    }
-    if (descriptor->options().message_set_wire_format()) {
-      flags.push_back("CGPMessageFlagMessageSetWireFormat");
-    }
-    return JoinFlags(flags);
+  if (descriptor->options().message_set_wire_format()) {
+    flags.push_back("CGPMessageFlagMessageSetWireFormat");
   }
+  return JoinFlags(flags);
+}
+
 } // namespace
 
 MessageGenerator::MessageGenerator(const Descriptor* descriptor)
@@ -87,10 +70,10 @@ MessageGenerator::MessageGenerator(const Descriptor* descriptor)
 MessageGenerator::~MessageGenerator() {
 }
 
-void MessageGenerator::CollectForwardDeclarations(set<string> &declarations)
-    const {
-  declarations.insert("@class " + ClassName(descriptor_) + "_Builder");
-  declarations.insert("@class ComGoogleProtobufDescriptors_Descriptor");
+void MessageGenerator::CollectForwardDeclarations(
+    std::set<string>* declarations) const {
+  declarations->insert("@class " + ClassName(descriptor_) + "_Builder");
+  declarations->insert("@class ComGoogleProtobufDescriptors_Descriptor");
 
   for (int i = 0; i < descriptor_->field_count(); i++) {
     field_generators_.get(descriptor_->field(i))
@@ -98,70 +81,79 @@ void MessageGenerator::CollectForwardDeclarations(set<string> &declarations)
   }
 
   for (int i = 0; i < descriptor_->nested_type_count(); i++) {
-    MessageGenerator(descriptor_->nested_type(i))
-        .CollectForwardDeclarations(declarations);
+    if (IsMapEntry(descriptor_->nested_type(i))) continue;
+    MessageGenerator generator(descriptor_->nested_type(i));
+    generator.CollectMessageOrBuilderForwardDeclarations(declarations);
+    generator.CollectForwardDeclarations(declarations);
   }
 }
 
-void MessageGenerator::CollectMessageOrBuilderImports(set<string> &imports)
+void MessageGenerator::CollectMessageOrBuilderImports(std::set<string>* imports)
     const {
   if (descriptor_->extension_range_count() > 0) {
-    imports.insert("com/google/protobuf/GeneratedMessage.h");
+    imports->insert("com/google/protobuf/GeneratedMessage.h");
   } else {
-    imports.insert("com/google/protobuf/MessageOrBuilder.h");
+    imports->insert("com/google/protobuf/MessageOrBuilder.h");
   }
 
   for (int i = 0; i < descriptor_->field_count(); i++) {
     field_generators_.get(descriptor_->field(i))
-        .CollectMessageOrBuilderImports(imports);
-  }
-
-  for (int i = 0; i < descriptor_->nested_type_count(); i++) {
-    MessageGenerator(descriptor_->nested_type(i))
         .CollectMessageOrBuilderImports(imports);
   }
 }
 
 void MessageGenerator::CollectMessageOrBuilderForwardDeclarations(
-    set<string> &declarations) const {
+    std::set<string>* declarations) const {
   for (int i = 0; i < descriptor_->field_count(); i++) {
     field_generators_.get(descriptor_->field(i))
         .CollectMessageOrBuilderForwardDeclarations(declarations);
   }
 
-  for (int i = 0; i < descriptor_->nested_type_count(); i++) {
-    MessageGenerator(descriptor_->nested_type(i))
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i))
         .CollectMessageOrBuilderForwardDeclarations(declarations);
   }
 }
 
-void MessageGenerator::CollectSourceImports(set<string> &imports) {
-  imports.insert("com/google/protobuf/GeneratedMessage_PackagePrivate.h");
+void MessageGenerator::CollectHeaderImports(std::set<string>* imports) const {
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i)).CollectHeaderImports(imports);
+  }
+
+  for (int i = 0; i < descriptor_->nested_type_count(); i++) {
+    if (IsMapEntry(descriptor_->nested_type(i))) continue;
+    MessageGenerator generator(descriptor_->nested_type(i));
+    generator.CollectMessageOrBuilderImports(imports);
+    generator.CollectHeaderImports(imports);
+  }
+}
+
+void MessageGenerator::CollectSourceImports(std::set<string>* imports) const {
+  imports->insert("com/google/protobuf/GeneratedMessage_PackagePrivate.h");
 
   for (int i = 0; i < descriptor_->field_count(); i++) {
     field_generators_.get(descriptor_->field(i)).CollectSourceImports(imports);
+  }
+
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i)).CollectSourceImports(imports);
   }
 
   for (int i = 0; i < descriptor_->extension_count(); i++) {
     ExtensionGenerator(descriptor_->extension(i)).CollectSourceImports(imports);
   }
 
+  for (int i = 0; i < descriptor_->enum_type_count(); i++) {
+    EnumGenerator(descriptor_->enum_type(i)).CollectSourceImports(imports);
+  }
+
   for (int i = 0; i < descriptor_->nested_type_count(); i++) {
+    if (IsMapEntry(descriptor_->nested_type(i))) continue;
     MessageGenerator(descriptor_->nested_type(i)).CollectSourceImports(imports);
   }
 }
 
-void MessageGenerator::GenerateEnumHeader(io::Printer* printer) {
-  for (int i = 0; i < descriptor_->enum_type_count(); i++) {
-    EnumGenerator(descriptor_->enum_type(i)).GenerateHeader(printer);
-  }
-
-  for (int i = 0; i < descriptor_->nested_type_count(); i++) {
-    MessageGenerator(descriptor_->nested_type(i)).GenerateEnumHeader(printer);
-  }
-}
-
-void MessageGenerator::GenerateMessageHeader(io::Printer* printer) {
+void MessageGenerator::GenerateHeader(io::Printer* printer) {
   string superclassName = "ComGoogleProtobufGeneratedMessage";
   if (descriptor_->extension_range_count() > 0) {
     superclassName = "ComGoogleProtobufGeneratedMessage_ExtendableMessage";
@@ -250,33 +242,30 @@ void MessageGenerator::GenerateMessageHeader(io::Printer* printer) {
           "*$classname$_descriptor_;\n",
       "classname", ClassName(descriptor_));
 
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i)).GenerateHeader(printer);
+  }
+
   for (int i = 0; i < descriptor_->extension_count(); i++) {
     ExtensionGenerator(descriptor_->extension(i))
         .GenerateMembersHeader(printer);
   }
 
+  for (int i = 0; i < descriptor_->enum_type_count(); i++) {
+    EnumGenerator(descriptor_->enum_type(i)).GenerateHeader(printer);
+  }
+
   for (int i = 0; i < descriptor_->nested_type_count(); i++) {
-    MessageGenerator(descriptor_->nested_type(i)).GenerateMessageHeader(printer);
+    if (IsMapEntry(descriptor_->nested_type(i))) continue;
+    MessageGenerator generator(descriptor_->nested_type(i));
+    generator.GenerateMessageOrBuilder(printer);
+    generator.GenerateHeader(printer);
   }
 
   GenerateBuilderHeader(printer);
 }
 
-void MessageGenerator::GenerateHeader(io::Printer* printer) {
-  GenerateEnumHeader(printer);
-  GenerateMessageHeader(printer);
-}
-
 void MessageGenerator::GenerateSource(io::Printer* printer) {
-  std::unique_ptr<const FieldDescriptor * []> sorted_fields(
-      SortFieldsByNumber(descriptor_));
-  uint32_t singularFieldCount = 0;
-  for (int i = 0; i < descriptor_->field_count(); i++) {
-    if (!sorted_fields[i]->is_repeated()) {
-      singularFieldCount++;
-    }
-  }
-
   printer->Print("\n"
       "J2OBJC_INITIALIZED_DEFN($classname$);\n"
       "\n"
@@ -296,11 +285,28 @@ void MessageGenerator::GenerateSource(io::Printer* printer) {
       "typedef struct $classname$_Storage {\n"
       "  uint32_t hasBits[$num_has_bytes$];\n",
       "classname", ClassName(descriptor_),
-      "num_has_bytes", SimpleItoa((singularFieldCount + 31) / 32));
+      "num_has_bytes", SimpleItoa((field_generators_.numHasBits() + 31) / 32));
 
   printer->Indent();
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i))
+        .GenerateStorageDeclaration(printer);
+  }
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    const OneofDescriptor* oneof = descriptor_->oneof_decl(i);
+    printer->Print("union {\n");
+    printer->Indent();
+    for (int j = 0; j < oneof->field_count(); j++) {
+      field_generators_.get(oneof->field(j)).GenerateDeclaration(printer);
+    }
+    printer->Outdent();
+    printer->Print("};\n");
+  }
   for (int i = 0; i < descriptor_->field_count(); i++) {
-    field_generators_.get(sorted_fields[i]).GenerateDeclaration(printer);
+    const FieldDescriptor* field = descriptor_->field(i);
+    if (field->containing_oneof() == NULL) {
+      field_generators_.get(field).GenerateDeclaration(printer);
+    }
   }
   printer->Outdent();
 
@@ -318,21 +324,56 @@ void MessageGenerator::GenerateSource(io::Printer* printer) {
       "classname", ClassName(descriptor_));
   printer->Indent();
   printer->Indent();
+  // The descriptor must be assigned before field data is initialized.
+  // Specifically the non-static initialization of field class types may result
+  // in an access of this descriptor during its class initialization.
+  printer->Print(
+      "$classname$_descriptor_ = CGPInitDescriptor(self, "
+          "[$classname$_Builder class], $flags$, "
+          "sizeof($classname$_Storage));\n",
+      "classname", ClassName(descriptor_),
+      "flags", GetMessageFlags(descriptor_));
+  if (field_generators_.numMapFields() > 0) {
+    printer->Print("static CGPFieldData mapEntryFields[] = {\n");
+    printer->Indent();
+    for (int i = 0; i < descriptor_->field_count(); i++) {
+      field_generators_.get(descriptor_->field(i))
+          .GenerateMapEntryFieldData(printer);
+    }
+    printer->Outdent();
+    printer->Print("};\n");
+    for (int i = 0; i < descriptor_->field_count(); i++) {
+      field_generators_.get(descriptor_->field(i))
+          .GenerateMapEntryNonStaticFieldData(printer, "mapEntryFields");
+    }
+  }
   printer->Print("static CGPFieldData fields[] = {\n");
   printer->Indent();
   for (int i = 0; i < descriptor_->field_count(); i++) {
-    field_generators_.get(sorted_fields[i]).GenerateFieldData(printer);
+    field_generators_.get(descriptor_->field(i)).GenerateFieldData(printer);
   }
   printer->Outdent();
+  printer->Print("};\n");
+  for (int i = 0; i < descriptor_->field_count(); i++) {
+    field_generators_.get(descriptor_->field(i))
+        .GenerateNonStaticFieldData(printer, "fields", i);
+  }
+  if (descriptor_->oneof_decl_count() > 0) {
+    printer->Print("static CGPOneofData oneofs[] = {\n");
+    printer->Indent();
+    for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+      OneofGenerator(descriptor_->oneof_decl(i)).GenerateOneofData(printer);
+    }
+    printer->Outdent();
+    printer->Print("};\n");
+  }
   printer->Print(
-      "};\n"
-      "CGPInitDescriptor(&$classname$_descriptor_, "
-          "self, [$classname$_Builder class], $flags$, "
-          "sizeof($classname$_Storage), $fieldcount$, fields);\n"
-      "",
+      "CGPInitFields($classname$_descriptor_, $fieldcount$, fields, "
+          "$oneofcount$, $oneofdata$);\n",
       "classname", ClassName(descriptor_),
-      "flags", GetMessageFlags(descriptor_),
-      "fieldcount", SimpleItoa(descriptor_->field_count()));
+      "fieldcount", SimpleItoa(descriptor_->field_count()),
+      "oneofcount", SimpleItoa(descriptor_->oneof_decl_count()),
+      "oneofdata", descriptor_->oneof_decl_count() > 0 ? "oneofs" : "NULL");
 
   if (descriptor_->extension_count() > 0) {
     printer->Print("static CGPFieldData extensionFields[] = {\n");
@@ -342,6 +383,10 @@ void MessageGenerator::GenerateSource(io::Printer* printer) {
     }
     printer->Outdent();
     printer->Print("};\n");
+    for (int i = 0; i < descriptor_->extension_count(); i++) {
+      ExtensionGenerator(descriptor_->extension(i))
+          .GenerateNonStaticFieldData(printer, "extensionFields", i);
+    }
     for (int i = 0; i < descriptor_->extension_count(); i++) {
       ExtensionGenerator(descriptor_->extension(i))
           .GenerateSourceInitializer(printer);
@@ -407,11 +452,16 @@ void MessageGenerator::GenerateSource(io::Printer* printer) {
       "}\n",
       "classname", ClassName(descriptor_));
 
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i)).GenerateSource(printer);
+  }
+
   for (int i = 0; i < descriptor_->enum_type_count(); i++) {
     EnumGenerator(descriptor_->enum_type(i)).GenerateSource(printer);
   }
 
   for (int i = 0; i < descriptor_->nested_type_count(); i++) {
+    if (IsMapEntry(descriptor_->nested_type(i))) continue;
     MessageGenerator(descriptor_->nested_type(i)).GenerateSource(printer);
   }
 
@@ -493,6 +543,11 @@ void MessageGenerator::GenerateMessageOrBuilder(io::Printer* printer) {
         .GenerateMessageOrBuilderProtocol(printer);
   }
 
+  for (int i = 0; i < descriptor_->oneof_decl_count(); i++) {
+    OneofGenerator(descriptor_->oneof_decl(i))
+        .GenerateMessageOrBuilder(printer);
+  }
+
   printer->Print("\n"
       "@end\n"
       "\n"
@@ -500,11 +555,6 @@ void MessageGenerator::GenerateMessageOrBuilder(io::Printer* printer) {
       "\n"
       "J2OBJC_TYPE_LITERAL_HEADER($classname$OrBuilder)\n",
       "classname", ClassName(descriptor_));
-
-  for (int i = 0; i < descriptor_->nested_type_count(); i++) {
-    MessageGenerator(descriptor_->nested_type(i))
-        .GenerateMessageOrBuilder(printer);
-  }
 }
 
 void MessageGenerator::GenerateExtensionRegistrationCode(io::Printer* printer) {
@@ -514,6 +564,7 @@ void MessageGenerator::GenerateExtensionRegistrationCode(io::Printer* printer) {
   }
 
   for (int i = 0; i < descriptor_->nested_type_count(); i++) {
+    if (IsMapEntry(descriptor_->nested_type(i))) continue;
     MessageGenerator(descriptor_->nested_type(i))
         .GenerateExtensionRegistrationCode(printer);
   }

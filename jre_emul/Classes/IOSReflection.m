@@ -21,7 +21,9 @@
 
 #import "IOSClass.h"
 #import "java/lang/AssertionError.h"
+#import "java/lang/ClassNotFoundException.h"
 #import "java/lang/reflect/Constructor.h"
+#import "java/lang/reflect/Field.h"
 #import "java/lang/reflect/Method.h"
 #import "objc/message.h"
 
@@ -76,8 +78,15 @@ IOSClass *JreClassForString(const char * const str) {
   const char *ptr = str;
   IOSClass *result = ParseNextClass(&ptr);
   if (!result) {
-    @throw create_JavaLangAssertionError_initWithId_(
-      [NSString stringWithFormat:@"invalid type from metadata %s", str]);
+    NSString *type = [NSString stringWithCString:str encoding:NSUTF8StringEncoding];
+    size_t len = strlen(str);
+    if (len > 2 && *str == 'L' && str[len - 1] == ';') {
+      type = [type substringWithRange:NSMakeRange(1, len - 2)];
+      @throw create_JavaLangClassNotFoundException_initWithNSString_(type);
+    } else {
+      @throw create_JavaLangAssertionError_initWithId_(
+        [NSString stringWithFormat:@"invalid type from metadata %@", type]);
+    }
   }
   return result;
 }
@@ -282,6 +291,35 @@ static NSMutableString *BuildQualifiedName(const J2ObjcClassInfo *metadata) {
 
 NSString *JreClassQualifiedName(const J2ObjcClassInfo *metadata) {
   return BuildQualifiedName(metadata);
+}
+
+JavaLangReflectField *FindDeclaredField(IOSClass *iosClass, NSString *name, jboolean publicOnly) {
+  const J2ObjcClassInfo *metadata = IOSClass_GetMetadataOrFail(iosClass);
+  const J2ObjcFieldInfo *fieldMeta = JreFindFieldInfo(metadata, [name UTF8String]);
+  if (fieldMeta && (!publicOnly || (fieldMeta->modifiers & JavaLangReflectModifier_PUBLIC) != 0)) {
+    Ivar ivar = class_getInstanceVariable(iosClass.objcClass, fieldMeta->name);
+    return [JavaLangReflectField fieldWithIvar:ivar
+                                     withClass:iosClass
+                                  withMetadata:fieldMeta];
+  }
+  return nil;
+}
+
+JavaLangReflectField *FindField(IOSClass *iosClass, NSString *name, jboolean publicOnly) {
+  while (iosClass) {
+    JavaLangReflectField *field = FindDeclaredField(iosClass, name, publicOnly);
+    if (field) {
+      return field;
+    }
+    for (IOSClass *p in [iosClass getInterfacesInternal]) {
+      JavaLangReflectField *field = FindField(p, name, publicOnly);
+      if (field) {
+        return field;
+      }
+    }
+    iosClass = [iosClass getSuperclass];
+  }
+  return nil;
 }
 
 #pragma clang diagnostic pop

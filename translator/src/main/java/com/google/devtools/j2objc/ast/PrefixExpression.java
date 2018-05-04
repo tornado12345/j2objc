@@ -29,8 +29,8 @@ public class PrefixExpression extends Expression {
   public static enum Operator {
     INCREMENT("++"),
     DECREMENT("--"),
-    PLUS("+"),
-    MINUS("-"),
+    POSITIVE("+"),
+    NEGATIVE("-"),
     COMPLEMENT("~"),
     NOT("!"),
     DEREFERENCE("*"),
@@ -43,6 +43,9 @@ public class PrefixExpression extends Expression {
       for (Operator operator : Operator.values()) {
         stringLookup.put(operator.toString(), operator);
       }
+      // javac uses "+++" and "---" to differentiate from infix operators.
+      stringLookup.put("+++", POSITIVE);
+      stringLookup.put("---", NEGATIVE);
     }
 
     private Operator(String opString) {

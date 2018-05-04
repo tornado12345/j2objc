@@ -33,26 +33,27 @@
 //  Hand written counterpart for com.google.protobuf.GeneratedMessage and
 //  friends.
 
-#import "com/google/protobuf/GeneratedMessage_PackagePrivate.h"
+#include "com/google/protobuf/GeneratedMessage_PackagePrivate.h"
 
 #include <map>
 
-#import "com/google/protobuf/ByteString.h"
-#import "com/google/protobuf/RepeatedField.h"
-#import "com/google/protobuf/CodedInputStream.h"
-#import "com/google/protobuf/Descriptors_PackagePrivate.h"
-#import "com/google/protobuf/ExtensionRegistryLite.h"
-#import "com/google/protobuf/Internal.h"
-#import "com/google/protobuf/InvalidProtocolBufferException.h"
-#import "com/google/protobuf/ProtocolMessageEnum.h"
-#import "com/google/protobuf/WireFormat.h"
-#import "java/io/InputStream.h"
-#import "java/lang/IllegalArgumentException.h"
-#import "java/lang/IndexOutOfBoundsException.h"
-#import "java/lang/StringBuilder.h"
-#import "java/lang/UnsupportedOperationException.h"
-#import "java/util/ArrayList.h"
-#import "java/util/HashMap.h"
+#include "com/google/protobuf/ByteString.h"
+#include "com/google/protobuf/CodedInputStream.h"
+#include "com/google/protobuf/Descriptors_PackagePrivate.h"
+#include "com/google/protobuf/ExtensionRegistryLite.h"
+#include "com/google/protobuf/Internal.h"
+#include "com/google/protobuf/InvalidProtocolBufferException.h"
+#include "com/google/protobuf/MapField.h"
+#include "com/google/protobuf/ProtocolMessageEnum.h"
+#include "com/google/protobuf/RepeatedField.h"
+#include "com/google/protobuf/WireFormat.h"
+#include "java/io/InputStream.h"
+#include "java/lang/IllegalArgumentException.h"
+#include "java/lang/IndexOutOfBoundsException.h"
+#include "java/lang/StringBuilder.h"
+#include "java/lang/UnsupportedOperationException.h"
+#include "java/util/ArrayList.h"
+#include "java/util/HashMap.h"
 
 // GeneratedMessage is an abstract class so not all the methods in the Message
 // protocol are implemented here.
@@ -66,8 +67,8 @@
 #define NIL_CHECK_Float(value)
 #define NIL_CHECK_Double(value)
 #define NIL_CHECK_Bool(value)
-#define NIL_CHECK_Enum(value) nil_chk(value);
-#define NIL_CHECK_Retainable(value) nil_chk(value);
+#define NIL_CHECK_Enum(value) (void)nil_chk(value);
+#define NIL_CHECK_Retainable(value) (void)nil_chk(value);
 
 // Forward declarations.
 class CGPExtensionValue;
@@ -160,41 +161,113 @@ static inline CGPExtensionMap *BuilderExtensionMap(id msg, CGPDescriptor *descri
       &((ComGoogleProtobufGeneratedMessage_ExtendableBuilder *)msg)->extensionMap_ : NULL;
 }
 
+// This struct describes how to access a field's "has" state. For regular
+// singular fields, there is a single bit representing the "has" state. For
+// oneof fields, the "has" state can be determined from the value of the current
+// oneof case.
 typedef struct {
   size_t offset;
-  uint32_t mask;
-} CGPHasBitLocator;
+  union {
+    uint32_t mask;  // For regular fields that use the has bit.
+    jint fieldNum;  // For oneof fields.
+  };
+  bool isOneof;
+} CGPHasLocator;
 
-static CGPHasBitLocator GetHasBitLocator(Class cls, const CGPFieldDescriptor *field) {
-  uint32_t idx = CGPFieldGetHasBitIndex(field);
-  CGPHasBitLocator result;
-  uint32_t byteIndex = idx / 32;
-  result.mask = (1 << (idx % 32));
-  result.offset = class_getInstanceSize(cls) + byteIndex * sizeof(uint32_t);
+// We use the most significant bit (sign bit) of the oneof case field number to
+// indicate that the field is retainable. This allows the value to be correctly
+// released when a new value is being set without having to look up the previous
+// value's field descriptor.
+#define ONEOF_FIELD_NUM_MASK 0x7fffffff
+#define ONEOF_RETAINABLE_MASK 0x80000000
+
+static CGPHasLocator GetHasLocator(Class cls, const CGPFieldDescriptor *field) {
+  CGPOneofDescriptor *oneof = field->containingOneof_;
+  CGPHasLocator result;
+  result.isOneof = oneof != nil;
+  if (oneof) {
+    result.offset = CGPOneofGetOffset(oneof, cls);
+    result.fieldNum = CGPFieldGetNumber(field);
+    if (CGPIsRetainedType(CGPFieldGetJavaType(field))) {
+      // The sign bit is used to indicate that the current value need to be
+      // released when a new field in the oneof is set.
+      result.fieldNum |= ONEOF_RETAINABLE_MASK;
+    }
+  } else {
+    uint32_t idx = CGPFieldGetHasBitIndex(field);
+    uint32_t byteIndex = idx / 32;
+    result.mask = (1 << (idx % 32));
+    result.offset = class_getInstanceSize(cls) + byteIndex * sizeof(uint32_t);
+  }
   return result;
 }
 
-CGP_ALWAYS_INLINE static inline bool GetHasBit(id msg, CGPHasBitLocator loc) {
-  return (*(uint32_t *)((uint8_t *)msg + loc.offset) & loc.mask) ? true : false;
+static bool GetHas(id msg, CGPHasLocator loc) {
+  uintptr_t ptr = (uintptr_t)msg + loc.offset;
+  if (loc.isOneof) {
+    return *(jint *)ptr == loc.fieldNum;
+  } else {
+    return (*(uint32_t *)ptr & loc.mask) ? true : false;
+  }
 }
 
-CGP_ALWAYS_INLINE static inline void SetHasBit(id msg, CGPHasBitLocator loc) {
-  *(uint32_t *)((uint8_t *)msg + loc.offset) |= loc.mask;
+// Sets the "has" state of a field to "on". This should always be paired with a
+// call to ClearPreviousOneof() to ensure that the previous value of a oneof
+// field is properly released.
+static void SetHas(id msg, CGPHasLocator loc) {
+  uintptr_t ptr = (uintptr_t)msg + loc.offset;
+  if (loc.isOneof) {
+    *(jint *)ptr = loc.fieldNum;
+  } else {
+    *(uint32_t *)ptr |= loc.mask;
+  }
 }
 
-CGP_ALWAYS_INLINE static inline void UnsetHasBit(id msg, CGPHasBitLocator loc) {
-  *(uint32_t *)((uint8_t *)msg + loc.offset) &= ~loc.mask;
+// Returns whether the "has" state has been unset. For oneof fields this will be
+// false if the oneof is currently set with a different field.
+static bool UnsetHas(id msg, CGPHasLocator loc) {
+  uintptr_t ptr = (uintptr_t)msg + loc.offset;
+  if (loc.isOneof) {
+    jint *oneofCase = (jint *)ptr;
+    if (*oneofCase == loc.fieldNum) {
+      *oneofCase = 0;
+      return true;
+    }
+    return false;
+  } else {
+    *(uint32_t *)ptr &= ~loc.mask;
+    return true;
+  }
+}
+
+// Clears and releases the previous value iff it is a oneof field and the oneof
+// was previously set to a different field.
+static inline void ClearPreviousOneof(id msg, CGPHasLocator loc, uintptr_t ptr) {
+  if (loc.isOneof) {
+    jint *oneofCase = (jint *)((uintptr_t)msg + loc.offset);
+    // Only clear if the oneof is set to a different field. Merging logic relies
+    // on the value being preserved if it is for the correct field.
+    if (*oneofCase != loc.fieldNum) {
+      if (*oneofCase & ONEOF_RETAINABLE_MASK) {
+        id *objPtr = (id *)ptr;
+        [*objPtr autorelease];
+        *objPtr = nil;
+      }
+      *oneofCase = 0;
+    }
+  }
 }
 
 #define REPEATED_FIELD_PTR(msg, offset) ((CGPRepeatedField *)((uint8_t *)msg + offset))
+#define MAP_FIELD_PTR(msg, offset) ((CGPMapField *)((uint8_t *)msg + offset))
 #define FIELD_PTR(TYPE, msg, offset) ((TYPE *)((uint8_t *)msg + offset))
 
 #define SINGULAR_SETTER_IMP(NAME) \
-  static void SingularSet##NAME( \
-      id msg, TYPE_##NAME value, size_t offset, CGPHasBitLocator hasLoc) { \
+  static void SingularSet##NAME(id msg, TYPE_##NAME value, size_t offset, CGPHasLocator hasLoc) { \
     TYPE_##NAME *ptr = FIELD_PTR(TYPE_##NAME, msg, offset); \
+    ClearPreviousOneof(msg, hasLoc, (uintptr_t)ptr); \
     TYPE_ASSIGN_##NAME(*ptr, value); \
-    SetHasBit(msg, hasLoc); \
+    SetHas(msg, hasLoc); \
   }
 
 FOR_EACH_TYPE_WITH_ENUM(SINGULAR_SETTER_IMP)
@@ -208,9 +281,9 @@ FOR_EACH_TYPE_WITH_ENUM(SINGULAR_SETTER_IMP)
 
 #define SINGULAR_GETTER_IMP(NAME) \
   static IMP GetSingularGetterImp##NAME( \
-      size_t offset, CGPHasBitLocator hasLoc, TYPE_##NAME defaultValue) { \
+      size_t offset, CGPHasLocator hasLoc, TYPE_##NAME defaultValue) { \
     return imp_implementationWithBlock(^TYPE_##NAME(id msg) { \
-      if (GetHasBit(msg, hasLoc)) { \
+      if (GetHas(msg, hasLoc)) { \
         return *FIELD_PTR(TYPE_##NAME, msg, offset); \
       } \
       return defaultValue; \
@@ -237,7 +310,7 @@ static BOOL AddGetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
   IMP imp = NULL;
   char encoding[64];
   size_t offset = CGPFieldGetOffset(field, cls);
-  CGPHasBitLocator hasLoc = GetHasBitLocator(cls, field);
+  CGPHasLocator hasLoc = GetHasLocator(cls, field);
 
 #define ADD_GETTER_METHOD_CASE(NAME) \
   imp = repeated ? GetRepeatedGetterImp##NAME(offset) : \
@@ -257,9 +330,9 @@ static BOOL AddGetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
 }
 
 static BOOL AddHasMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
-  CGPHasBitLocator loc = GetHasBitLocator(cls, field);
+  CGPHasLocator loc = GetHasLocator(cls, field);
   IMP imp = imp_implementationWithBlock(^jboolean(id msg) {
-    return GetHasBit(msg, loc);
+    return GetHas(msg, loc);
   });
   char encoding[64];
   strcpy(encoding, @encode(jboolean));
@@ -269,9 +342,18 @@ static BOOL AddHasMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
 
 static BOOL AddCountMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
   size_t offset = CGPFieldGetOffset(field, cls);
-  IMP imp = imp_implementationWithBlock(^jint(id msg) {
-    return CGPRepeatedFieldSize(REPEATED_FIELD_PTR(msg, offset));
-  });
+  IMP imp;
+  if (CGPFieldIsMap(field)) {
+    CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+    CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+    imp = imp_implementationWithBlock(^jint(id msg) {
+      return CGPMapFieldMapSize(MAP_FIELD_PTR(msg, offset), keyType, valueType);
+    });
+  } else {
+    imp = imp_implementationWithBlock(^jint(id msg) {
+      return CGPRepeatedFieldSize(REPEATED_FIELD_PTR(msg, offset));
+    });
+  }
   char encoding[64];
   strcpy(encoding, @encode(jint));
   strcat(encoding, "@:");
@@ -287,28 +369,46 @@ static BOOL AddListGetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
   return class_addMethod(cls, sel, imp, "@@:");
 }
 
+static BOOL AddMapGetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
+  size_t offset = CGPFieldGetOffset(field, cls);
+  CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+  CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+  IMP imp = imp_implementationWithBlock(^id(id msg) {
+    return CGPMapFieldAsJavaMap(MAP_FIELD_PTR(msg, offset), keyType, valueType);
+  });
+  return class_addMethod(cls, sel, imp, "@@:");
+}
+
 static BOOL AddClearMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
   IMP imp;
   size_t offset = CGPFieldGetOffset(field, cls);
   CGPFieldJavaType type = CGPFieldGetJavaType(field);
-  if (CGPFieldIsRepeated(field)) {
+  if (CGPFieldIsMap(field)) {
+    CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+    CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+    imp = imp_implementationWithBlock(^id(id msg) {
+      CGPMapFieldClear(MAP_FIELD_PTR(msg, offset), keyType, valueType);
+      return msg;
+    });
+  } else if (CGPFieldIsRepeated(field)) {
     imp = imp_implementationWithBlock(^id(id msg) {
       CGPRepeatedFieldClear(REPEATED_FIELD_PTR(msg, offset), type);
       return msg;
     });
   } else {
-    CGPHasBitLocator hasLoc = GetHasBitLocator(cls, field);
+    CGPHasLocator hasLoc = GetHasLocator(cls, field);
     if (CGPIsRetainedType(type)) {
       imp = imp_implementationWithBlock(^id(id msg) {
-        UnsetHasBit(msg, hasLoc);
-        id *ptr = FIELD_PTR(id, msg, offset);
-        [*ptr autorelease];
-        *ptr = nil;
+        if (UnsetHas(msg, hasLoc)) {
+          id *ptr = FIELD_PTR(id, msg, offset);
+          [*ptr autorelease];
+          *ptr = nil;
+        }
         return msg;
       });
     } else {
       imp = imp_implementationWithBlock(^id(id msg) {
-        UnsetHasBit(msg, hasLoc);
+        UnsetHas(msg, hasLoc);
         return msg;
       });
     }
@@ -317,7 +417,7 @@ static BOOL AddClearMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
 }
 
 #define GET_SINGULAR_SETTER_IMP(NAME) \
-  static IMP GetSingularSetterImp##NAME(size_t offset, CGPHasBitLocator hasLoc) { \
+  static IMP GetSingularSetterImp##NAME(size_t offset, CGPHasLocator hasLoc) { \
     return imp_implementationWithBlock(^id(id msg, TYPE_##NAME value) { \
       NIL_CHECK_##NAME(value) \
       SingularSet##NAME(msg, value, offset, hasLoc); \
@@ -354,7 +454,7 @@ static BOOL AddSetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
 
 #define ADD_SETTER_METHOD_CASE(NAME) \
   imp = repeated ? GetRepeatedSetterImp##NAME(offset) : \
-      GetSingularSetterImp##NAME(offset, GetHasBitLocator(cls, field)); \
+      GetSingularSetterImp##NAME(offset, GetHasLocator(cls, field)); \
   strcat(encoding, @encode(TYPE_##NAME)); \
   break;
 
@@ -367,14 +467,15 @@ static BOOL AddSetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
 
 static BOOL AddBuilderSetterMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
   size_t offset = CGPFieldGetOffset(field, cls);
-  CGPHasBitLocator hasLoc = GetHasBitLocator(cls, field);
+  CGPHasLocator hasLoc = GetHasLocator(cls, field);
   IMP imp = imp_implementationWithBlock(^id(id msg, id value) {
-    nil_chk(value);
+    (void)nil_chk(value);
     id *ptr = FIELD_PTR(id, msg, offset);
+    ClearPreviousOneof(msg, hasLoc, (uintptr_t)ptr);
     id builtValue = [(ComGoogleProtobufGeneratedMessage_Builder *)value build];
     [*ptr autorelease];
     *ptr = [builtValue retain];
-    SetHasBit(msg, hasLoc);
+    SetHas(msg, hasLoc);
     return msg;
   });
   return class_addMethod(cls, sel, imp, "@@:@");
@@ -415,7 +516,7 @@ static BOOL AddBuilderAdderMethod(Class cls, SEL sel, CGPFieldDescriptor *field)
   size_t offset = CGPFieldGetOffset(field, cls);
   IMP imp = imp_implementationWithBlock(^id(
       id msg, ComGoogleProtobufGeneratedMessage_Builder *value) {
-    nil_chk(value);
+    (void)nil_chk(value);
     CGPRepeatedFieldAddRetainable(REPEATED_FIELD_PTR(msg, offset), [value build]);
     return msg;
   });
@@ -452,6 +553,279 @@ static BOOL AddAddAllMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
   return class_addMethod(cls, sel, imp, "@@:@");
 }
 
+#define GET_CONTAINS_IMP(NAME) \
+  static IMP GetContainsImp##NAME( \
+      size_t offset, CGPFieldJavaType keyType, CGPFieldJavaType valueType) { \
+    return imp_implementationWithBlock(^jboolean(id msg, TYPE_##NAME pKey) { \
+      CGPValue key; \
+      key.CGPValueField_##NAME = pKey; \
+      return CGPMapFieldGetWithKey(MAP_FIELD_PTR(msg, offset), key, keyType, valueType) != nil; \
+    }); \
+  }
+
+GET_CONTAINS_IMP(Int)
+GET_CONTAINS_IMP(Long)
+GET_CONTAINS_IMP(Bool)
+GET_CONTAINS_IMP(Id)
+
+#undef GET_CONTAINS_IMP
+
+static BOOL AddContainsMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
+  IMP imp = NULL;
+  char encoding[64];
+  strcpy(encoding, @encode(jboolean));
+  strcat(encoding, "@:");
+  size_t offset = CGPFieldGetOffset(field, cls);
+  CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+  CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+
+#define CONTAINS_METHOD_CASE(NAME) \
+  imp = GetContainsImp##NAME(offset, keyType, valueType); \
+  strcat(encoding, @encode(TYPE_##NAME)); \
+  break;
+
+  switch (keyType) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT:
+      CONTAINS_METHOD_CASE(Int)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_LONG:
+      CONTAINS_METHOD_CASE(Long)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BOOLEAN:
+      CONTAINS_METHOD_CASE(Bool)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_STRING:
+      CONTAINS_METHOD_CASE(Id)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_FLOAT:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_DOUBLE:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE:
+      return NO;
+  }
+
+#undef CONTAINS_METHOD_CASE
+
+  return class_addMethod(cls, sel, imp, encoding);
+}
+
+#define GET_MAP_GETTER_IMP(KEY_NAME, VALUE_NAME) \
+  static IMP GetMapGetOrThrowImp##KEY_NAME##VALUE_NAME( \
+      size_t offset, CGPFieldJavaType keyType, CGPFieldJavaType valueType) { \
+    return imp_implementationWithBlock(^TYPE_##VALUE_NAME(id msg, TYPE_##KEY_NAME pKey) { \
+      CGPValue key; \
+      key.CGPValueField_##KEY_NAME = pKey; \
+      CGPMapFieldEntry *entry = CGPMapFieldGetWithKey( \
+          MAP_FIELD_PTR(msg, offset), key, keyType, valueType); \
+      if (entry) { \
+        return entry->value.CGPValueField_##VALUE_NAME; \
+      } \
+      @throw create_JavaLangIllegalArgumentException_init(); \
+    }); \
+  } \
+  static IMP GetMapGetOrDefaultImp##KEY_NAME##VALUE_NAME( \
+      size_t offset, CGPFieldJavaType keyType, CGPFieldJavaType valueType) { \
+    return imp_implementationWithBlock(^TYPE_##VALUE_NAME( \
+        id msg, TYPE_##KEY_NAME pKey, TYPE_##VALUE_NAME defaultValue) { \
+      CGPValue key; \
+      key.CGPValueField_##KEY_NAME = pKey; \
+      CGPMapFieldEntry *entry = CGPMapFieldGetWithKey( \
+          MAP_FIELD_PTR(msg, offset), key, keyType, valueType); \
+      if (entry) { \
+        return entry->value.CGPValueField_##VALUE_NAME; \
+      } \
+      return defaultValue; \
+    }); \
+  }
+
+#define GET_MAP_GETTER_IMP_FOR_VALUE(VALUE_NAME) \
+  GET_MAP_GETTER_IMP(Int, VALUE_NAME) \
+  GET_MAP_GETTER_IMP(Long, VALUE_NAME) \
+  GET_MAP_GETTER_IMP(Bool, VALUE_NAME) \
+  GET_MAP_GETTER_IMP(Id, VALUE_NAME) \
+
+FOR_EACH_TYPE_NO_ENUM(GET_MAP_GETTER_IMP_FOR_VALUE)
+
+#undef GET_MAP_GETTER_IMP
+
+static BOOL AddMapGetWithKeyMethod(Class cls, SEL sel, CGPFieldDescriptor *field, bool orDefault) {
+  IMP imp = NULL;
+  char encoding[64];
+  size_t offset = CGPFieldGetOffset(field, cls);
+  CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+  CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+
+#define MAP_GETTER_CASE(KEY_NAME, VALUE_NAME) \
+  imp = orDefault ? GetMapGetOrDefaultImp##KEY_NAME##VALUE_NAME(offset, keyType, valueType) : \
+      GetMapGetOrThrowImp##KEY_NAME##VALUE_NAME(offset, keyType, valueType); \
+  strcat(encoding, @encode(TYPE_##KEY_NAME)); \
+  break;
+
+#define MAP_GETTER_INNER_SWITCH(VALUE_NAME) \
+  strcpy(encoding, @encode(TYPE_##VALUE_NAME)); \
+  strcat(encoding, "@:"); \
+  switch (keyType) { \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT: \
+      MAP_GETTER_CASE(Int, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_LONG: \
+      MAP_GETTER_CASE(Long, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BOOLEAN: \
+      MAP_GETTER_CASE(Bool, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_STRING: \
+      MAP_GETTER_CASE(Id, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_FLOAT: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_DOUBLE: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE: \
+      return NO; \
+  } \
+  if (orDefault) { \
+    strcat(encoding, @encode(TYPE_##VALUE_NAME)); \
+  } \
+  break;
+
+  SWITCH_TYPES_NO_ENUM(valueType, MAP_GETTER_INNER_SWITCH)
+
+#undef MAP_GETTER_CASE
+#undef MAP_GETTER_INNER_SWITCH
+
+  return class_addMethod(cls, sel, imp, encoding);
+}
+
+#define GET_PUT_IMP(KEY_NAME, VALUE_NAME) \
+  static IMP GetPutImp##KEY_NAME##VALUE_NAME( \
+      size_t offset, CGPFieldJavaType keyType, CGPFieldJavaType valueType) { \
+    return imp_implementationWithBlock( \
+        ^id(id msg, TYPE_##KEY_NAME pKey, TYPE_##VALUE_NAME pValue) { \
+      CGPValue key; \
+      key.CGPValueField_##KEY_NAME = pKey; \
+      CGPValue value; \
+      value.CGPValueField_##VALUE_NAME = pValue; \
+      CGPMapFieldPut( \
+          MAP_FIELD_PTR(msg, offset), key, keyType, value, valueType, \
+          /* retainedKeyAndValue */ false); \
+      return msg; \
+    }); \
+  }
+
+#define GET_PUT_IMP_FOR_VALUE(VALUE_NAME) \
+  GET_PUT_IMP(Int, VALUE_NAME) \
+  GET_PUT_IMP(Long, VALUE_NAME) \
+  GET_PUT_IMP(Bool, VALUE_NAME) \
+  GET_PUT_IMP(Id, VALUE_NAME)
+
+FOR_EACH_TYPE_NO_ENUM(GET_PUT_IMP_FOR_VALUE)
+
+#undef GET_PUT_IMP
+#undef GET_PUT_IMP_FOR_VALUE
+
+static BOOL AddPutMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
+  IMP imp = NULL;
+  char encoding[64];
+  strcpy(encoding, "@@:");
+  size_t offset = CGPFieldGetOffset(field, cls);
+  CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+  CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+
+#define PUT_METHOD_CASE(KEY_NAME, VALUE_NAME) \
+  imp = GetPutImp##KEY_NAME##VALUE_NAME(offset, keyType, valueType); \
+  strcat(encoding, @encode(TYPE_##KEY_NAME)); \
+  break;
+
+#define PUT_METHOD_INNER_SWITCH(VALUE_NAME) \
+  switch (keyType) { \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT: \
+      PUT_METHOD_CASE(Int, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_LONG: \
+      PUT_METHOD_CASE(Long, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BOOLEAN: \
+      PUT_METHOD_CASE(Bool, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_STRING: \
+      PUT_METHOD_CASE(Id, VALUE_NAME) \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_FLOAT: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_DOUBLE: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING: \
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE: \
+      return NO; \
+  } \
+  strcat(encoding, @encode(TYPE_##VALUE_NAME)); \
+  break;
+
+  SWITCH_TYPES_NO_ENUM(valueType, PUT_METHOD_INNER_SWITCH)
+
+#undef PUT_METHOD_CASE
+#undef PUT_METHOD_INNER_SWITCH
+
+  return class_addMethod(cls, sel, imp, encoding);
+}
+
+#define GET_REMOVE_IMP(NAME) \
+  static IMP GetRemoveImp##NAME( \
+      size_t offset, CGPFieldJavaType keyType, CGPFieldJavaType valueType) { \
+    return imp_implementationWithBlock(^id(id msg, TYPE_##NAME pKey) { \
+      CGPValue key; \
+      key.CGPValueField_##NAME = pKey; \
+      CGPMapFieldRemove(MAP_FIELD_PTR(msg, offset), key, keyType, valueType); \
+      return msg; \
+    }); \
+  }
+
+GET_REMOVE_IMP(Int)
+GET_REMOVE_IMP(Long)
+GET_REMOVE_IMP(Bool)
+GET_REMOVE_IMP(Id)
+
+#undef GET_REMOVE_IMP
+
+static BOOL AddRemoveMethod(Class cls, SEL sel, CGPFieldDescriptor *field) {
+  IMP imp = NULL;
+  char encoding[64];
+  strcpy(encoding, "@@:");
+  size_t offset = CGPFieldGetOffset(field, cls);
+  CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+  CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+
+#define REMOVE_METHOD_CASE(NAME) \
+  imp = GetRemoveImp##NAME(offset, keyType, valueType); \
+  strcat(encoding, @encode(TYPE_##NAME)); \
+  break;
+
+  switch (keyType) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT:
+      REMOVE_METHOD_CASE(Int)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_LONG:
+      REMOVE_METHOD_CASE(Long)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BOOLEAN:
+      REMOVE_METHOD_CASE(Bool)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_STRING:
+      REMOVE_METHOD_CASE(Id)
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_FLOAT:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_DOUBLE:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE:
+      return NO;
+  }
+
+#undef REMOVE_METHOD_CASE
+
+  return class_addMethod(cls, sel, imp, encoding);
+}
+
+static IMP GetOneofImp(size_t offset, Class cls) {
+  return imp_implementationWithBlock(^id(id msg) {
+    jint number = *FIELD_PTR(jint, msg, offset);
+    // Remove the sign bit which marks whether the value is retainable.
+    number &= ONEOF_FIELD_NUM_MASK;
+    return [cls forNumberWithInt:number];
+  });
+}
+
+static BOOL AddOneofGetterMethod(Class cls, SEL sel, CGPOneofDescriptor *oneof) {
+  size_t offset = CGPOneofGetOffset(oneof, cls);
+  IMP imp = GetOneofImp(offset, CGPOneofGetCaseClass(oneof));
+  return class_addMethod(cls, sel, imp, "@@:");
+}
+
 static const char *GetParamKeyword(CGPFieldDescriptor *field) {
   switch (CGPFieldGetJavaType(field)) {
     case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT: return "Int";
@@ -463,11 +837,34 @@ static const char *GetParamKeyword(CGPFieldDescriptor *field) {
     case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING:
       return "ComGoogleProtobufByteString";
     case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM:
-      return field->data_->className;
     case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE:
-      return field->data_->className;
+      return class_getName(field->data_->objcType);
   }
   __builtin_unreachable();
+}
+
+static bool Matches(const char **strPtr, const char *match, size_t len) {
+  if (strncmp(*strPtr, match, len) == 0) {
+    *strPtr += len;
+    return true;
+  }
+  return false;
+}
+
+static bool MatchesStr(const char **strPtr, const char *match) {
+  return Matches(strPtr, match, strlen(match));
+}
+
+static bool MatchesKeyword(const char **strPtr, CGPFieldDescriptor *field) {
+  return MatchesStr(strPtr, GetParamKeyword(field));
+}
+
+static bool MatchesName(const char **strPtr, CGPFieldDescriptor *field) {
+  return MatchesStr(strPtr, field->data_->javaName);
+}
+
+static bool MatchesEnd(const char *str, const char *match) {
+  return strcmp(str, match) == 0;
 }
 
 static BOOL ResolveGetAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, const char *selName) {
@@ -476,23 +873,48 @@ static BOOL ResolveGetAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, co
   NSUInteger count = fields->size_;
   for (NSUInteger i = 0; i < count; ++i) {
     ComGoogleProtobufDescriptors_FieldDescriptor *field = fieldsBuf[i];
-    const char *fieldName = field->data_->javaName;
-    size_t nameLen = strlen(fieldName);
-    if (strncmp(fieldName, selName, nameLen) != 0) {
+    const char *tail = selName;
+    if (!MatchesName(&tail, field)) {
       continue;
     }
-    const char *tail = selName + nameLen;
-    if (CGPFieldIsRepeated(field)) {
-      if (strcmp("WithInt:", tail) == 0) {
-        return AddGetterMethod(cls, sel, field);
-      } else if (strcmp("Count", tail) == 0) {
+    const char *tail2 = tail;
+    if (CGPFieldIsMap(field)) {
+      if (MatchesEnd(tail, "Count")) {
         return AddCountMethod(cls, sel, field);
-      } else if (strcmp("List", tail) == 0) {
+      } else if (MatchesEnd(tail, "Map")) {
+        return AddMapGetterMethod(cls, sel, field);
+      } else if (Matches(&tail, "OrThrowWith", 11)
+          && MatchesKeyword(&tail, CGPFieldMapKey(field)) && MatchesEnd(tail, ":")) {
+        return AddMapGetWithKeyMethod(cls, sel, field, false);
+      } else if (Matches(&tail2, "OrDefaultWith", 13)
+          && MatchesKeyword(&tail2, CGPFieldMapKey(field)) && Matches(&tail2, ":with", 5)
+          && MatchesKeyword(&tail2, CGPFieldMapValue(field)) && MatchesEnd(tail2, ":")) {
+        return AddMapGetWithKeyMethod(cls, sel, field, true);
+      }
+    } else if (CGPFieldIsRepeated(field)) {
+      if (MatchesEnd(tail, "WithInt:")) {
+        return AddGetterMethod(cls, sel, field);
+      } else if (MatchesEnd(tail, "Count")) {
+        return AddCountMethod(cls, sel, field);
+      } else if (MatchesEnd(tail, "List")) {
         return AddListGetterMethod(cls, sel, field);
       }
     } else {
       if (*tail == 0) {
         return AddGetterMethod(cls, sel, field);
+      }
+    }
+  }
+
+  IOSObjectArray *oneofs = descriptor->oneofs_;
+  if (oneofs) {
+    ComGoogleProtobufDescriptors_OneofDescriptor **oneofsBuf = oneofs->buffer_;
+    NSUInteger oneofsCount = oneofs->size_;
+    for (NSUInteger i = 0; i < oneofsCount; ++i) {
+      ComGoogleProtobufDescriptors_OneofDescriptor *oneof = oneofsBuf[i];
+      const char *tail = selName;
+      if (MatchesStr(&tail, oneof->data_->javaName) && MatchesEnd(tail, "Case")) {
+        return AddOneofGetterMethod(cls, sel, oneof);
       }
     }
   }
@@ -505,7 +927,7 @@ static BOOL ResolveHasAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, co
   NSUInteger count = fields->size_;
   for (NSUInteger i = 0; i < count; ++i) {
     ComGoogleProtobufDescriptors_FieldDescriptor *field = fieldsBuf[i];
-    if (!CGPFieldIsRepeated(field) && strcmp(field->data_->javaName, selName) == 0) {
+    if (!CGPFieldIsRepeated(field) && MatchesEnd(selName, field->data_->javaName)) {
       return AddHasMethod(cls, sel, field);
     }
   }
@@ -518,34 +940,19 @@ static BOOL ResolveSetAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, co
   NSUInteger count = fields->size_;
   for (NSUInteger i = 0; i < count; ++i) {
     ComGoogleProtobufDescriptors_FieldDescriptor *field = fieldsBuf[i];
-    const char *fieldName = field->data_->javaName;
-    size_t nameLen = strlen(fieldName);
-    if (strncmp(fieldName, selName, nameLen) != 0) {
+    if (CGPFieldIsMap(field)) {
       continue;
     }
-    const char *tail = selName + nameLen;
-    BOOL repeated = CGPFieldIsRepeated(field);
-    if (repeated) {
-      if (strncmp("WithInt:with", tail, 12) != 0) {
-        continue;
+    const char *tail = selName;
+    if (MatchesName(&tail, field)
+        && (CGPFieldIsRepeated(field) ? Matches(&tail, "WithInt:with", 12)
+            : Matches(&tail, "With", 4))
+        && MatchesKeyword(&tail, field)) {
+      if (MatchesEnd(tail, ":")) {
+        return AddSetterMethod(cls, sel, field);
+      } else if (MatchesEnd(tail, "_Builder:")) {
+        return AddBuilderSetterMethod(cls, sel, field);
       }
-      tail += 12;
-    } else {
-      if (strncmp("With", tail, 4) != 0) {
-        continue;
-      }
-      tail += 4;
-    }
-    const char *paramKeyword = GetParamKeyword(field);
-    size_t paramLen = strlen(paramKeyword);
-    if (strncmp(paramKeyword, tail, paramLen) != 0) {
-      continue;
-    }
-    tail += paramLen;
-    if (strcmp(":", tail) == 0) {
-      return AddSetterMethod(cls, sel, field);
-    } else if (strcmp("_Builder:", tail) == 0) {
-      return AddBuilderSetterMethod(cls, sel, field);
     }
   }
   return NO;
@@ -558,7 +965,7 @@ static BOOL ResolveClearAccessor(
   NSUInteger count = fields->size_;
   for (NSUInteger i = 0; i < count; ++i) {
     ComGoogleProtobufDescriptors_FieldDescriptor *field = fieldsBuf[i];
-    if (strcmp(field->data_->javaName, selName) == 0) {
+    if (MatchesEnd(selName, field->data_->javaName)) {
       return AddClearMethod(cls, sel, field);
     }
   }
@@ -571,26 +978,13 @@ static BOOL ResolveAddAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, co
   NSUInteger count = fields->size_;
   for (NSUInteger i = 0; i < count; ++i) {
     ComGoogleProtobufDescriptors_FieldDescriptor *field = fieldsBuf[i];
-    const char *fieldName = field->data_->javaName;
-    size_t nameLen = strlen(fieldName);
-    if (strncmp(fieldName, selName, nameLen) != 0) {
-      continue;
-    }
-    const char *tail = selName + nameLen;
-    if (strncmp("With", tail, 4) != 0) {
-      continue;
-    }
-    tail += 4;
-    const char *paramKeyword = GetParamKeyword(field);
-    size_t paramLen = strlen(paramKeyword);
-    if (strncmp(paramKeyword, tail, paramLen) != 0) {
-      continue;
-    }
-    tail += paramLen;
-    if (strcmp(":", tail) == 0) {
-      AddAdderMethod(cls, sel, field);
-    } else if (strcmp("_Builder:", tail) == 0) {
-      AddBuilderAdderMethod(cls, sel, field);
+    const char *tail = selName;
+    if (MatchesName(&tail, field) && Matches(&tail, "With", 4) && MatchesKeyword(&tail, field)) {
+      if (MatchesEnd(tail, ":")) {
+        return AddAdderMethod(cls, sel, field);
+      } else if (MatchesEnd(tail, "_Builder:")) {
+        return AddBuilderAdderMethod(cls, sel, field);
+      }
     }
   }
   return NO;
@@ -603,14 +997,57 @@ static BOOL ResolveAddAllAccessor(
   NSUInteger count = fields->size_;
   for (NSUInteger i = 0; i < count; ++i) {
     ComGoogleProtobufDescriptors_FieldDescriptor *field = fieldsBuf[i];
-    const char *fieldName = field->data_->javaName;
-    size_t nameLen = strlen(fieldName);
-    if (strncmp(fieldName, selName, nameLen) != 0) {
-      continue;
+    const char *tail = selName;
+    if (MatchesName(&tail, field) && MatchesEnd(tail, "WithJavaLangIterable:")) {
+      return AddAddAllMethod(cls, sel, field);
     }
-    const char *tail = selName + nameLen;
-    if (strcmp("WithJavaLangIterable:", tail) == 0) {
-      AddAddAllMethod(cls, sel, field);
+  }
+  return NO;
+}
+
+static BOOL ResolveContainsAccessor(
+    Class cls, CGPDescriptor *descriptor, SEL sel, const char *selName) {
+  IOSObjectArray *fields = descriptor->fields_;
+  CGPFieldDescriptor **fieldsBuf = fields->buffer_;
+  NSUInteger count = fields->size_;
+  for (NSUInteger i = 0; i < count; ++i) {
+    CGPFieldDescriptor *field = fieldsBuf[i];
+    const char *tail = selName;
+    if (CGPFieldIsMap(field) && MatchesName(&tail, field) && Matches(&tail, "With", 4)
+        && MatchesKeyword(&tail, CGPFieldMapKey(field)) && MatchesEnd(tail, ":")) {
+      return AddContainsMethod(cls, sel, field);
+    }
+  }
+  return NO;
+}
+
+static BOOL ResolvePutAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, const char *selName) {
+  IOSObjectArray *fields = descriptor->fields_;
+  CGPFieldDescriptor **fieldsBuf = fields->buffer_;
+  NSUInteger count = fields->size_;
+  for (NSUInteger i = 0; i < count; ++i) {
+    CGPFieldDescriptor *field = fieldsBuf[i];
+    const char *tail = selName;
+    if (CGPFieldIsMap(field) && MatchesName(&tail, field) && Matches(&tail, "With", 4)
+        && MatchesKeyword(&tail, CGPFieldMapKey(field)) && Matches(&tail, ":with", 5)
+        && MatchesKeyword(&tail, CGPFieldMapValue(field)) && MatchesEnd(tail, ":")) {
+      return AddPutMethod(cls, sel, field);
+    }
+  }
+  return NO;
+}
+
+static BOOL ResolveRemoveAccessor(
+    Class cls, CGPDescriptor *descriptor, SEL sel, const char *selName) {
+  IOSObjectArray *fields = descriptor->fields_;
+  CGPFieldDescriptor **fieldsBuf = fields->buffer_;
+  NSUInteger count = fields->size_;
+  for (NSUInteger i = 0; i < count; ++i) {
+    CGPFieldDescriptor *field = fieldsBuf[i];
+    const char *tail = selName;
+    if (CGPFieldIsMap(field) && MatchesName(&tail, field) && Matches(&tail, "With", 4)
+        && MatchesKeyword(&tail, CGPFieldMapKey(field)) && MatchesEnd(tail, ":")) {
+      return AddRemoveMethod(cls, sel, field);
     }
   }
   return NO;
@@ -618,22 +1055,29 @@ static BOOL ResolveAddAllAccessor(
 
 static BOOL ResolveAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, BOOL isBuilder) {
   const char *selName = sel_getName(sel);
-  if (strncmp("get", selName, 3) == 0) {
-    return ResolveGetAccessor(cls, descriptor, sel, selName + 3);
-  } else if (strncmp("has", selName, 3) == 0) {
-    return ResolveHasAccessor(cls, descriptor, sel, selName + 3);
+  if (Matches(&selName, "get", 3)) {
+    return ResolveGetAccessor(cls, descriptor, sel, selName);
+  } else if (Matches(&selName, "has", 3)) {
+    return ResolveHasAccessor(cls, descriptor, sel, selName);
+  } else if (Matches(&selName, "contains", 8)) {
+    return ResolveContainsAccessor(cls, descriptor, sel, selName);
   }
   if (isBuilder) {
-    if (strncmp("set", selName, 3) == 0) {
-      return ResolveSetAccessor(cls, descriptor, sel, selName + 3);
-    } else if (strncmp("clear", selName, 5) == 0) {
-      return ResolveClearAccessor(cls, descriptor, sel, selName + 5);
-    } else if (strncmp("add", selName, 3) == 0) {
-      if (strncmp("All", selName + 3, 3) == 0
-          && ResolveAddAllAccessor(cls, descriptor, sel, selName + 6)) {
+    if (Matches(&selName, "set", 3)) {
+      return ResolveSetAccessor(cls, descriptor, sel, selName);
+    } else if (Matches(&selName, "clear", 5)) {
+      return ResolveClearAccessor(cls, descriptor, sel, selName);
+    } else if (Matches(&selName, "add", 3)) {
+      const char *addAllSelName = selName;
+      if (Matches(&addAllSelName, "All", 3)
+          && ResolveAddAllAccessor(cls, descriptor, sel, addAllSelName)) {
         return YES;
       }
-      return ResolveAddAccessor(cls, descriptor, sel, selName + 3);
+      return ResolveAddAccessor(cls, descriptor, sel, selName);
+    } else if (Matches(&selName, "put", 3)) {
+      return ResolvePutAccessor(cls, descriptor, sel, selName);
+    } else if (Matches(&selName, "remove", 6)) {
+      return ResolveRemoveAccessor(cls, descriptor, sel, selName);
     }
   }
   return NO;
@@ -646,7 +1090,7 @@ static BOOL ResolveAccessor(Class cls, CGPDescriptor *descriptor, SEL sel, BOOL 
 
 static id GetSingularField(id msg, CGPFieldDescriptor *field) {
   Class msgCls = object_getClass(msg);
-  bool isSet = GetHasBit(msg, GetHasBitLocator(msgCls, field));
+  bool isSet = GetHas(msg, GetHasLocator(msgCls, field));
   size_t offset = CGPFieldGetOffset(field, msgCls);
 
 #define GET_FIELD_CASE(NAME) \
@@ -664,8 +1108,13 @@ static id GetSingularField(id msg, CGPFieldDescriptor *field) {
 }
 
 static id GetField(id msg, CGPFieldDescriptor *field) {
-  nil_chk(field);
-  if (CGPFieldIsRepeated(field)) {
+  (void)nil_chk(field);
+  if (CGPFieldIsMap(field)) {
+    size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
+    CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+    CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+    return CGPMapFieldCopyList(MAP_FIELD_PTR(msg, offset), keyType, valueType);
+  } else if (CGPFieldIsRepeated(field)) {
     size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
     return CGPRepeatedFieldCopyList(REPEATED_FIELD_PTR(msg, offset), field);
   } else {
@@ -678,8 +1127,8 @@ static jboolean HasField(id msg, CGPFieldDescriptor *descriptor) {
     @throw AUTORELEASE([[JavaLangUnsupportedOperationException alloc]
         initWithNSString:@"hasField() called on a repeated field."]);
   }
-  CGPHasBitLocator hasLoc = GetHasBitLocator(object_getClass(msg), descriptor);
-  return GetHasBit(msg, hasLoc);
+  CGPHasLocator hasLoc = GetHasLocator(object_getClass(msg), descriptor);
+  return GetHas(msg, hasLoc);
 }
 
 static id<JavaUtilMap> GetAllFields(id msg) {
@@ -690,14 +1139,20 @@ static id<JavaUtilMap> GetAllFields(id msg) {
   CGPFieldDescriptor **fieldsBuf = descriptor->fields_->buffer_;
   for (NSUInteger i = 0; i < fieldCount; i++) {
     CGPFieldDescriptor *field = fieldsBuf[i];
-    if (CGPFieldIsRepeated(field)) {
-      size_t offset = CGPFieldGetOffset(field, msgCls);
-      CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, offset);
+    if (CGPFieldIsMap(field)) {
+      CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+      CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+      CGPMapField *mapField = MAP_FIELD_PTR(msg, CGPFieldGetOffset(field, msgCls));
+      if (!CGPMapFieldIsEmpty(mapField)) {
+        [result putWithId:field withId:CGPMapFieldCopyList(mapField, keyType, valueType)];
+      }
+    } else if (CGPFieldIsRepeated(field)) {
+      CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, CGPFieldGetOffset(field, msgCls));
       if (CGPRepeatedFieldSize(repeatedField) > 0) {
         [result putWithId:field withId:CGPRepeatedFieldCopyList(repeatedField, field)];
       }
     } else {
-      if (GetHasBit(msg, GetHasBitLocator(msgCls, field))) {
+      if (GetHas(msg, GetHasLocator(msgCls, field))) {
         [result putWithId:field withId:GetSingularField(msg, field)];
       }
     }
@@ -715,14 +1170,21 @@ static void CheckIsRepeated(CGPFieldDescriptor *descriptor) {
 static jint GetRepeatedFieldCount(id msg, CGPFieldDescriptor *descriptor) {
   CheckIsRepeated(nil_chk(descriptor));
   size_t offset = CGPFieldGetOffset(descriptor, object_getClass(msg));
-  return CGPRepeatedFieldSize(REPEATED_FIELD_PTR(msg, offset));
+  if (CGPFieldIsMap(descriptor)) {
+    return CGPMapFieldListSize(MAP_FIELD_PTR(msg, offset));
+  } else {
+    return CGPRepeatedFieldSize(REPEATED_FIELD_PTR(msg, offset));
+  }
 }
 
 static id GetRepeatedField(id msg, CGPFieldDescriptor *descriptor, jint index) {
   CheckIsRepeated(nil_chk(descriptor));
   size_t offset = CGPFieldGetOffset(descriptor, object_getClass(msg));
-  CGPRepeatedField *field = REPEATED_FIELD_PTR(msg, offset);
-  return CGPRepeatedFieldGet(field, index, descriptor);
+  if (CGPFieldIsMap(descriptor)) {
+    return CGPMapFieldGetAtIndex(MAP_FIELD_PTR(msg, offset), index, descriptor);
+  } else {
+    return CGPRepeatedFieldGet(REPEATED_FIELD_PTR(msg, offset), index, descriptor);
+  }
 }
 
 static void ReleaseAllFields(id self, Class cls, CGPDescriptor *descriptor) {
@@ -730,11 +1192,15 @@ static void ReleaseAllFields(id self, Class cls, CGPDescriptor *descriptor) {
   NSUInteger count = descriptor->fields_->size_;
   for (NSUInteger i = 0; i < count; i++) {
     CGPFieldDescriptor *field = fields[i];
-    uint8_t *ptr = ((uint8_t *)self + CGPFieldGetOffset(field, cls));
+    uintptr_t ptr = ((uintptr_t)self + CGPFieldGetOffset(field, cls));
     CGPFieldJavaType javaType = CGPFieldGetJavaType(field);
-    if (CGPFieldIsRepeated(field)) {
+    if (CGPFieldIsMap(field)) {
+      CGPMapFieldClear(
+          (CGPMapField *)ptr, CGPFieldGetJavaType(CGPFieldMapKey(field)),
+          CGPFieldGetJavaType(CGPFieldMapValue(field)));
+    } else if (CGPFieldIsRepeated(field)) {
       CGPRepeatedFieldClear((CGPRepeatedField *)ptr, javaType);
-    } else if (CGPIsRetainedType(javaType)) {
+    } else if (CGPIsRetainedType(javaType) && GetHas(self, GetHasLocator(cls, field))) {
       [*(id *)ptr autorelease];
     }
   }
@@ -749,11 +1215,15 @@ static void CopyAllFields(
   NSUInteger count = descriptor->fields_->size_;
   for (NSUInteger i = 0; i < count; i++) {
     CGPFieldDescriptor *field = fields[i];
-    uint8_t *ptr = ((uint8_t *)copy + CGPFieldGetOffset(field, copyCls));
+    uintptr_t ptr = ((uintptr_t)copy + CGPFieldGetOffset(field, copyCls));
     CGPFieldJavaType javaType = CGPFieldGetJavaType(field);
-    if (CGPFieldIsRepeated(field)) {
+    if (CGPFieldIsMap(field)) {
+      CGPMapFieldCopyData(
+          (CGPMapField *)ptr, CGPFieldGetJavaType(CGPFieldMapKey(field)),
+          CGPFieldGetJavaType(CGPFieldMapValue(field)));
+    } else if (CGPFieldIsRepeated(field)) {
       CGPRepeatedFieldCopyData((CGPRepeatedField *)ptr, javaType);
-    } else if (CGPIsRetainedType(javaType)) {
+    } else if (CGPIsRetainedType(javaType) && GetHas(copy, GetHasLocator(copyCls, field))) {
       [*(id *)ptr retain];
     }
   }
@@ -793,30 +1263,35 @@ static void MergeFieldsFromMessage(id msg, id other, CGPDescriptor *descriptor) 
     CGPFieldJavaType type = CGPFieldGetJavaType(field);
     size_t msgOffset = CGPFieldGetOffset(field, msgCls);
     size_t otherOffset = CGPFieldGetOffset(field, otherCls);
-    if (CGPFieldIsRepeated(field)) {
+    if (CGPFieldIsMap(field)) {
+      CGPMapFieldAppendOther(
+          MAP_FIELD_PTR(msg, msgOffset), MAP_FIELD_PTR(other, otherOffset),
+          CGPFieldGetJavaType(CGPFieldMapKey(field)), CGPFieldGetJavaType(CGPFieldMapValue(field)));
+    } else if (CGPFieldIsRepeated(field)) {
       CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, msgOffset);
       CGPRepeatedField *otherRepeatedField = REPEATED_FIELD_PTR(other, otherOffset);
       if (otherRepeatedField->data != NULL) {
         CGPRepeatedFieldAppendOther(repeatedField, otherRepeatedField, type);
       }
     } else {
-      CGPHasBitLocator otherHasLoc = GetHasBitLocator(otherCls, field);
-      if (!GetHasBit(other, otherHasLoc)) {
+      CGPHasLocator otherHasLoc = GetHasLocator(otherCls, field);
+      if (!GetHas(other, otherHasLoc)) {
         continue;
       }
-      CGPHasBitLocator hasLoc = GetHasBitLocator(msgCls, field);
-      if (CGPJavaTypeIsMessage(type) && GetHasBit(msg, hasLoc)) {
-        id *fieldPtr = FIELD_PTR(id, msg, msgOffset);
-        [*fieldPtr autorelease];
-        *fieldPtr = NewMergedMessageField(
-            *fieldPtr, *FIELD_PTR(id, other, otherOffset), field->valueType_);
+      CGPHasLocator hasLoc = GetHasLocator(msgCls, field);
+      uintptr_t fieldPtr = (uintptr_t)msg + msgOffset;
+      uintptr_t otherFieldPtr = (uintptr_t)other + otherOffset;
+      if (CGPJavaTypeIsMessage(type) && GetHas(msg, hasLoc)) {
+        id *msgPtr = (id *)fieldPtr;
+        [*msgPtr autorelease];
+        *msgPtr = NewMergedMessageField(*msgPtr, *(id *)otherFieldPtr, field->valueType_);
         continue;
       }
+      ClearPreviousOneof(msg, hasLoc, fieldPtr);
 
 #define MERGE_FIELD_CASE(NAME) \
       { \
-        TYPE_##NAME *ptr = FIELD_PTR(TYPE_##NAME, msg, msgOffset); \
-        TYPE_ASSIGN_##NAME(*ptr, *FIELD_PTR(TYPE_##NAME, other, otherOffset)); \
+        TYPE_ASSIGN_##NAME(*(TYPE_##NAME *)fieldPtr, *(TYPE_##NAME *)otherFieldPtr); \
         break; \
       }
 
@@ -824,7 +1299,7 @@ static void MergeFieldsFromMessage(id msg, id other, CGPDescriptor *descriptor) 
 
 #undef MERGE_FIELD_CASE
 
-      SetHasBit(msg, hasLoc);
+      SetHas(msg, hasLoc);
     }
   }
 }
@@ -923,6 +1398,107 @@ static inline BOOL MergeMessageFieldFromStream(
   if (!MergeFromStream(msg, type, input, registry, MessageExtensionMap(msg, type))) return NO;
   if (!input->ConsumedEntireMessage()) return NO;
   input->PopLimit(limit);
+  return YES;
+}
+
+// Reads a retained value if it is a retainable type.
+static BOOL ReadMapEntryField(
+    CGPCodedInputStream *stream, CGPFieldDescriptor *field, uint32_t tag,
+    CGPExtensionRegistryLite *registry, CGPValue *value) {
+  CGPFieldType type = CGPFieldGetType(field);
+  CGPWireFormat wireType = CGPWireFormatGetTagWireType(tag);
+  if (wireType != CGPWireFormatForType(type, false)) {
+    return NO;
+  }
+  BOOL isGroup = NO;
+  switch (type) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT32:
+      return CGPReadInt32(stream, &value->valueInt);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT32:
+      return CGPReadSint32(stream, &value->valueInt);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED32:
+      return CGPReadFixed32(stream, &value->valueInt);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT64:
+      return CGPReadInt64(stream, &value->valueLong);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT64:
+      return CGPReadSint64(stream, &value->valueLong);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED64:
+      return CGPReadFixed64(stream, &value->valueLong);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BOOL:
+      return CGPReadBool(stream, &value->valueBool);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FLOAT:
+      return CGPReadFloat(stream, &value->valueFloat);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_DOUBLE:
+      return CGPReadDouble(stream, &value->valueDouble);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_ENUM:
+      return ReadEnumJavaValue(stream, field->valueType_, &value->valueId)
+          && value->valueId != nil;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BYTES:
+      return stream->ReadRetainedByteString(&value->valueId);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_STRING:
+      return stream->ReadRetainedNSString(&value->valueId);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_GROUP:
+      isGroup = YES;
+      // fall through.
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_MESSAGE: {
+      ComGoogleProtobufGeneratedMessage *newMsg = CGPNewMessage(field->valueType_);
+      if (!(isGroup ?
+          MergeGroupFieldFromStream(newMsg, field, stream, registry) :
+          MergeMessageFieldFromStream(newMsg, field, stream, registry))) {
+        [newMsg release];
+        return NO;
+      }
+      value->valueId = newMsg;
+      return YES;
+    }
+  }
+  __builtin_unreachable();
+}
+
+static BOOL MergeMapEntryFromStream(
+    CGPMapField *field, CGPCodedInputStream *stream, CGPDescriptor *entry,
+    CGPExtensionRegistryLite *registry) {
+  int length;
+  if (!CGPReadInt32(stream, &length)) return NO;
+  CGPCodedInputStream::Limit limit = stream->PushLimit(length);
+  CGPFieldDescriptor *keyField = entry->fields_->buffer_[0];
+  CGPFieldDescriptor *valueField = entry->fields_->buffer_[1];
+  BOOL hasKey = NO;
+  BOOL hasValue = NO;
+  CGPValue key;
+  CGPValue value;
+  while (YES) {
+    uint32_t tag = stream->ReadTag();
+    if (tag == 0) break;
+    switch (CGPWireFormatGetTagFieldNumber(tag)) {
+      case 1:
+        if (hasKey && CGPIsRetainedType(CGPFieldGetJavaType(keyField))) {
+          [key.valueId release];
+        }
+        ReadMapEntryField(stream, keyField, tag, registry, &key);
+        hasKey = YES;
+        break;
+      case 2:
+        if (hasValue && CGPIsRetainedType(CGPFieldGetJavaType(valueField))) {
+          [value.valueId release];
+        }
+        ReadMapEntryField(stream, valueField, tag, registry, &value);
+        hasValue = YES;
+        break;
+      default:
+        if (!CGPWireFormatSkipField(stream, tag)) return NO;
+        break;
+    }
+  }
+  if (!stream->ConsumedEntireMessage()) return NO;
+  stream->PopLimit(limit);
+  CGPMapFieldPut(
+      field, key, CGPFieldGetJavaType(keyField), value, CGPFieldGetJavaType(valueField),
+      /* retainedKeyAndValue */ true);
   return YES;
 }
 
@@ -1121,14 +1697,19 @@ static BOOL MergeFieldFromStream(
     id msg, CGPFieldDescriptor *field, CGPCodedInputStream *stream,
     CGPExtensionRegistryLite *registry) {
   Class msgCls = object_getClass(msg);
-  size_t offset = CGPFieldGetOffset(field, msgCls);
+  uintptr_t fieldPtr = (uintptr_t)msg + CGPFieldGetOffset(field, msgCls);
   BOOL repeated = CGPFieldIsRepeated(field);
   BOOL isGroup = NO;
+  CGPHasLocator hasLoc;
+  if (!repeated) {
+    hasLoc = GetHasLocator(msgCls, field);
+    ClearPreviousOneof(msg, hasLoc, fieldPtr);
+  }
   switch (CGPFieldGetType(field)) {
 #define MERGE_FIELD_CASE(NAME, ENUM_NAME, JAVA_NAME) \
     case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_##ENUM_NAME: \
       if (repeated) { \
-        CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, offset); \
+        CGPRepeatedField *repeatedField = (CGPRepeatedField *)fieldPtr; \
         TYPE_##JAVA_NAME value; \
         if (CGPFieldIsPacked(field)) { \
           int length; \
@@ -1146,8 +1727,8 @@ static BOOL MergeFieldFromStream(
           CGPRepeatedFieldAdd##JAVA_NAME(repeatedField, value); \
         } \
       } else { \
-        if (!CGPRead##NAME(stream, FIELD_PTR(TYPE_##JAVA_NAME, msg, offset))) return NO; \
-        SetHasBit(msg, GetHasBitLocator(msgCls, field)); \
+        if (!CGPRead##NAME(stream, (TYPE_##JAVA_NAME *)fieldPtr)) return NO; \
+        SetHas(msg, hasLoc); \
       } \
       return YES;
     MERGE_FIELD_CASE(Int32, INT32, Int)
@@ -1168,7 +1749,7 @@ static BOOL MergeFieldFromStream(
         CGPEnumDescriptor *enumType = field->valueType_;
         id value;
         if (repeated) {
-          CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, offset);
+          CGPRepeatedField *repeatedField = (CGPRepeatedField *)fieldPtr;
           if (CGPFieldIsPacked(field)) {
             int length;
             if (!CGPReadInt32(stream, &length)) return NO;
@@ -1190,8 +1771,8 @@ static BOOL MergeFieldFromStream(
         } else {
           if (!ReadEnumJavaValue(stream, enumType, &value)) return NO;
           if (value == nil) return YES; // Skip setting has-bit.
-          *FIELD_PTR(id, msg, offset) = value;
-          SetHasBit(msg, GetHasBitLocator(msgCls, field));
+          *(id *)fieldPtr = value;
+          SetHas(msg, hasLoc);
         }
       }
       return YES;
@@ -1200,13 +1781,12 @@ static BOOL MergeFieldFromStream(
         CGPByteString *value;
         if (!stream->ReadRetainedByteString(&value)) return NO;
         if (repeated) {
-          CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, offset);
-          CGPRepeatedFieldAddRetainedId(repeatedField, value);
+          CGPRepeatedFieldAddRetainedId((CGPRepeatedField *)fieldPtr, value);
         } else {
-          id *ptr = FIELD_PTR(id, msg, offset);
+          id *ptr = (id *)fieldPtr;
           [*ptr autorelease];
           *ptr = value;
-          SetHasBit(msg, GetHasBitLocator(msgCls, field));
+          SetHas(msg, hasLoc);
         }
       }
       return YES;
@@ -1215,13 +1795,12 @@ static BOOL MergeFieldFromStream(
         NSString *value;
         if (!stream->ReadRetainedNSString(&value)) return NO;
         if (repeated) {
-          CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, offset);
-          CGPRepeatedFieldAddRetainedId(repeatedField, value);
+          CGPRepeatedFieldAddRetainedId((CGPRepeatedField *)fieldPtr, value);
         } else {
-          id *ptr = FIELD_PTR(id, msg, offset);
+          id *ptr = (id *)fieldPtr;
           [*ptr autorelease];
           *ptr = value;
-          SetHasBit(msg, GetHasBitLocator(msgCls, field));
+          SetHas(msg, hasLoc);
         }
       }
       return YES;
@@ -1231,19 +1810,21 @@ static BOOL MergeFieldFromStream(
     case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_MESSAGE:
       {
         CGPDescriptor *fieldType = field->valueType_;
+        if (CGPFieldIsMap(field)) {
+          return MergeMapEntryFromStream((CGPMapField *)fieldPtr, stream, fieldType, registry);
+        }
         ComGoogleProtobufGeneratedMessage *msgField = CGPNewMessage(fieldType);
         if (repeated) {
-          CGPRepeatedFieldAddRetainedId(REPEATED_FIELD_PTR(msg, offset), msgField);
+          CGPRepeatedFieldAddRetainedId((CGPRepeatedField *)fieldPtr, msgField);
         } else {
-          id *ptr = FIELD_PTR(id, msg, offset);
-          CGPHasBitLocator hasLoc = GetHasBitLocator(msgCls, field);
-          if (GetHasBit(msg, hasLoc)) {
+          id *ptr = (id *)fieldPtr;
+          if (GetHas(msg, hasLoc)) {
             CopyMessage(msgField, MessageExtensionMap(msgField, fieldType),
                         *ptr, MessageExtensionMap(*ptr, fieldType), fieldType);
           }
           [*ptr autorelease];
           *ptr = msgField;
-          SetHasBit(msg, hasLoc);
+          SetHas(msg, hasLoc);
         }
         if (isGroup) {
           if (!MergeGroupFieldFromStream(msgField, field, stream, registry)) return NO;
@@ -1439,6 +2020,75 @@ static int SerializedSizeForExtensions(CGPDescriptor *descriptor, CGPExtensionMa
   return size;
 }
 
+static int SerializedSizeForMapEntryField(CGPFieldDescriptor *field, CGPValue value) {
+  int tagSize = CGPGetTagSize(field->tag_);
+  switch (CGPFieldGetType(field)) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT32:
+      return tagSize + CGPGetInt32Size(value.valueInt);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT32:
+      return tagSize + CGPGetUint32Size(value.valueInt);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT32:
+      return tagSize + CGPGetSint32Size(value.valueInt);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT64:
+      return tagSize + CGPGetInt64Size(value.valueLong);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT64:
+      return tagSize + CGPGetSint64Size(value.valueLong);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FLOAT:
+      return tagSize + sizeof(uint32_t);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_DOUBLE:
+      return tagSize + sizeof(uint64_t);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BOOL:
+      return tagSize + 1;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_ENUM:
+      return tagSize + CGPGetEnumSize(CGPEnumGetIntValue(field->valueType_, value.valueId));
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BYTES:
+      return tagSize + CGPGetBytesSize(value.valueId);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_STRING:
+      return tagSize + CGPGetStringSize(value.valueId);
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_GROUP:
+      {
+        int msgSize = SerializedSizeForMessage(value.valueId, field->valueType_);
+        return tagSize * 2 + msgSize;
+      }
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_MESSAGE:
+      {
+        int msgSize = SerializedSizeForMessage(value.valueId, field->valueType_);
+        return tagSize + CGPGetInt32Size(msgSize) + msgSize;
+      }
+  }
+  __builtin_unreachable();
+}
+
+static int SerializedSizeForMapField(id msg, CGPFieldDescriptor *field) {
+  size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
+  CGPMapFieldData *data = MAP_FIELD_PTR(msg, offset)->data;
+  if (data == NULL) {
+    return 0;
+  }
+  int tagSize = CGPGetTagSize(field->tag_);
+  int numEntries = 0;
+  int entriesSize = 0;
+
+  CGPFieldDescriptor *keyField = CGPFieldMapKey(field);
+  CGPFieldDescriptor *valueField = CGPFieldMapValue(field);
+  CGPMapFieldEnsureValidMap(data, CGPFieldGetJavaType(keyField), CGPFieldGetJavaType(valueField));
+  CGPMapFieldEntry *entry = data->header.next;
+  while (entry != &data->header) {
+    int entrySize = SerializedSizeForMapEntryField(keyField, entry->key) +
+        SerializedSizeForMapEntryField(valueField, entry->value);
+    entriesSize += CGPGetInt32Size(entrySize) + entrySize;
+    numEntries++;
+    entry = entry->next;
+  }
+
+  return entriesSize + numEntries * tagSize;
+}
+
 static int SerializedSizeForRepeatedField(id msg, CGPFieldDescriptor *field) {
   Class msgCls = object_getClass(msg);
   int tagSize = CGPGetTagSize(field->tag_);
@@ -1535,8 +2185,7 @@ static int SerializedSizeForRepeatedField(id msg, CGPFieldDescriptor *field) {
 
 static int SerializedSizeForSingularField(id msg, CGPFieldDescriptor *field) {
   Class msgCls = object_getClass(msg);
-  CGPHasBitLocator hasLoc = GetHasBitLocator(msgCls, field);
-  if (!GetHasBit(msg, hasLoc)) {
+  if (!GetHas(msg, GetHasLocator(msgCls, field))) {
     return 0;
   }
 
@@ -1592,7 +2241,9 @@ static int ComputeSerializedSizeForMessage(
   CGPFieldDescriptor **fieldsBuf = descriptor->fields_->buffer_;
   for (NSUInteger i = 0; i < fieldsCount; i++) {
     CGPFieldDescriptor *field = fieldsBuf[i];
-    if (CGPFieldIsRepeated(field)) {
+    if (CGPFieldIsMap(field)) {
+      size += SerializedSizeForMapField(msg, field);
+    } else if (CGPFieldIsRepeated(field)) {
       size += SerializedSizeForRepeatedField(msg, field);
     } else {
       size += SerializedSizeForSingularField(msg, field);
@@ -1703,8 +2354,7 @@ static void WriteMessageSetExtension(
 
 static void WriteSingularField(id msg, CGPFieldDescriptor *field, CGPCodedOutputStream *output) {
   Class msgCls = object_getClass(msg);
-  CGPHasBitLocator hasLoc = GetHasBitLocator(msgCls, field);
-  if (!GetHasBit(msg, hasLoc)) {
+  if (!GetHas(msg, GetHasLocator(msgCls, field))) {
     return;
   }
   size_t offset = CGPFieldGetOffset(field, msgCls);
@@ -1748,6 +2398,86 @@ static void WriteSingularField(id msg, CGPFieldDescriptor *field, CGPCodedOutput
   }
 #undef WRITE_SINGULAR_FIELD_CASE
 }
+
+static void WriteMapEntryField(
+    CGPFieldDescriptor *field, CGPValue value, CGPCodedOutputStream *output) {
+  output->WriteTag(field->tag_);
+  switch (CGPFieldGetType(field)) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT32:
+      CGPWriteInt32(value.valueInt, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT32:
+      CGPWriteUint32(value.valueInt, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT32:
+      CGPWriteSint32(value.valueInt, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED32:
+      CGPWriteFixed32(value.valueInt, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT64:
+      CGPWriteInt64(value.valueLong, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT64:
+      CGPWriteSint64(value.valueLong, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED64:
+      CGPWriteFixed64(value.valueLong, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BOOL:
+      CGPWriteBool(value.valueBool, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FLOAT:
+      CGPWriteFloat(value.valueFloat, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_DOUBLE:
+      CGPWriteDouble(value.valueDouble, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_ENUM:
+      CGPWriteEnum(CGPEnumGetIntValue(field->valueType_, value.valueId), output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BYTES:
+      CGPWriteBytes(value.valueId, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_STRING:
+      CGPWriteString(value.valueId, output);
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_GROUP:
+      WriteMessage(value.valueId, field->valueType_, output);
+      output->WriteTag(CGPWireFormatMakeTag(CGPFieldGetNumber(field), CGPWireFormatEndGroup));
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_MESSAGE:
+      CGPWriteInt32(SerializedSizeForMessage(value.valueId, field->valueType_), output);
+      WriteMessage(value.valueId, field->valueType_, output);
+      return;
+  }
+}
+
+static void WriteMapField(id msg, CGPFieldDescriptor *field, CGPCodedOutputStream *output) {
+  size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
+  CGPMapFieldData *data = MAP_FIELD_PTR(msg, offset)->data;
+  if (data == NULL) {
+    return;
+  }
+
+  CGPFieldDescriptor *keyField = CGPFieldMapKey(field);
+  CGPFieldDescriptor *valueField = CGPFieldMapValue(field);
+  CGPMapFieldEnsureValidMap(data, CGPFieldGetJavaType(keyField), CGPFieldGetJavaType(valueField));
+  CGPMapFieldEntry *entry = data->header.next;
+  while (entry != &data->header) {
+    int entrySize = SerializedSizeForMapEntryField(keyField, entry->key) +
+        SerializedSizeForMapEntryField(valueField, entry->value);
+    output->WriteTag(field->tag_);
+    CGPWriteInt32(entrySize, output);
+    WriteMapEntryField(CGPFieldMapKey(field), entry->key, output);
+    WriteMapEntryField(CGPFieldMapValue(field), entry->value, output);
+    entry = entry->next;
+  }
+}
+
 
 static void WriteRepeatedField(id msg, CGPFieldDescriptor *field, CGPCodedOutputStream *output) {
   Class msgCls = object_getClass(msg);
@@ -1883,7 +2613,9 @@ static void WriteRepeatedField(id msg, CGPFieldDescriptor *field, CGPCodedOutput
 }
 
 static void WriteField(id msg, CGPFieldDescriptor *field, CGPCodedOutputStream *output) {
-  if (CGPFieldIsRepeated(field)) {
+  if (CGPFieldIsMap(field)) {
+    WriteMapField(msg, field, output);
+  } else if (CGPFieldIsRepeated(field)) {
     WriteRepeatedField(msg, field, output);
   } else {
     WriteSingularField(msg, field, output);
@@ -1891,8 +2623,9 @@ static void WriteField(id msg, CGPFieldDescriptor *field, CGPCodedOutputStream *
 }
 
 static void WriteMessage(id msg, CGPDescriptor *descriptor, CGPCodedOutputStream *output) {
-  NSUInteger fieldsCount = descriptor->fields_->size_;
-  CGPFieldDescriptor **fieldsBuf = descriptor->fields_->buffer_;
+  IOSObjectArray *orderedFields = CGPGetSerializationOrderFields(descriptor);
+  NSUInteger fieldsCount = orderedFields->size_;
+  CGPFieldDescriptor **fieldsBuf = orderedFields->buffer_;
   CGPExtensionMap *extensionMap = MessageExtensionMap(msg, descriptor);
   if (extensionMap == NULL) {
     for (NSUInteger i = 0; i < fieldsCount; i++) {
@@ -1937,9 +2670,26 @@ static BOOL MessageIsInitialized(id msg, CGPDescriptor *descriptor) {
   CGPFieldDescriptor **fieldsBuf = descriptor->fields_->buffer_;
   for (NSUInteger i = 0; i < fieldsCount; i++) {
     CGPFieldDescriptor *field = fieldsBuf[i];
-    BOOL isMessage = CGPJavaTypeIsMessage(CGPFieldGetJavaType(field));
-    if (CGPFieldIsRepeated(field)) {
-      if (isMessage) {
+    if (CGPFieldIsMap(field)) {
+      CGPFieldDescriptor *valueField = CGPFieldMapValue(field);
+      if (CGPJavaTypeIsMessage(CGPFieldGetJavaType(valueField))) {
+        size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
+        CGPMapFieldData *data = MAP_FIELD_PTR(msg, offset)->data;
+        if (data != NULL) {
+          CGPDescriptor *msgType = valueField->valueType_;
+          CGPMapFieldEnsureValidMap(
+              data, CGPFieldGetJavaType(CGPFieldMapKey(field)), CGPFieldGetJavaType(valueField));
+          CGPMapFieldEntry *entry = data->header.next;
+          while (entry != &data->header) {
+            if (entry != NULL && !MessageIsInitialized(entry->value.valueId, msgType)) {
+              return NO;
+            }
+            entry = entry->next;
+          }
+        }
+      }
+    } else if (CGPFieldIsRepeated(field)) {
+      if (CGPJavaTypeIsMessage(CGPFieldGetJavaType(field))) {
         size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
         CGPRepeatedField *repeatedField = REPEATED_FIELD_PTR(msg, offset);
         CGPRepeatedFieldData *data = repeatedField->data;
@@ -1953,10 +2703,11 @@ static BOOL MessageIsInitialized(id msg, CGPDescriptor *descriptor) {
         }
       }
     } else {
+      BOOL isMessage = CGPJavaTypeIsMessage(CGPFieldGetJavaType(field));
       BOOL required = CGPFieldIsRequired(field);
       if (!required && !isMessage) continue;
       Class msgCls = object_getClass(msg);
-      bool hasField = GetHasBit(msg, GetHasBitLocator(msgCls, field));
+      bool hasField = GetHas(msg, GetHasLocator(msgCls, field));
       if (required && !hasField) return NO;
       if (isMessage && hasField) {
         size_t offset = CGPFieldGetOffset(field, msgCls);
@@ -2055,6 +2806,83 @@ static void ExtensionFieldToString(
   }
 }
 
+void ValueToString(
+    CGPValue value, CGPFieldDescriptor *field, NSMutableString *builder, char *padding,
+    int indent) {
+  const char *fieldName = field->data_->name;
+  switch (CGPFieldGetType(field)) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED32:
+      [builder appendFormat:@"%s%s: %d\n", padding, fieldName, value.valueInt];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT32:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED32:
+      [builder appendFormat:@"%s%s: %u\n", padding, fieldName, (uint32_t)value.valueInt];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_INT64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SINT64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_SFIXED64:
+      [builder appendFormat:@"%s%s: %qd\n", padding, fieldName, value.valueLong];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_UINT64:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FIXED64:
+      [builder appendFormat:@"%s%s: %qu\n", padding, fieldName, (uint64_t)value.valueLong];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BOOL:
+      [builder appendFormat:@"%s%s: %s\n", padding, fieldName, value.valueBool ? "true" : "false"];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_FLOAT:
+      [builder appendFormat:@"%s%s: %g\n", padding, fieldName, value.valueFloat];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_DOUBLE:
+      [builder appendFormat:@"%s%s: %g\n", padding, fieldName, value.valueDouble];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_ENUM:
+      [builder appendFormat:@"%s%s: %@\n", padding, fieldName, value.valueId];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_BYTES:
+      [builder appendFormat:@"%s%s: %@\n", padding, fieldName, BytesToString(value.valueId)];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_STRING:
+      [builder appendFormat:@"%s%s: \"%@\"\n", padding, fieldName, value.valueId];
+      return;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_GROUP:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_MESSAGE:
+      [builder appendFormat:@"%s%s: {\n", padding, fieldName];
+      MessageToString(value.valueId, field->valueType_, builder, indent + 1);
+      [builder appendFormat:@"%s}\n", padding];
+      return;
+  }
+}
+
+static void MapFieldToString(
+    id msg, CGPFieldDescriptor *field, NSMutableString *builder, char *padding, int indent) {
+  size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
+  CGPMapFieldData *data = MAP_FIELD_PTR(msg, offset)->data;
+  if (data == NULL) {
+    return;
+  }
+
+  int paddingSize = (indent + 1) * 2;
+  char innerPadding[paddingSize + 1];
+  memset(&innerPadding, ' ', paddingSize);
+  innerPadding[paddingSize] = 0;
+
+  const char *fieldName = field->data_->name;
+  CGPFieldDescriptor *keyField = CGPFieldMapKey(field);
+  CGPFieldDescriptor *valueField = CGPFieldMapValue(field);
+  CGPMapFieldEnsureValidMap(data, CGPFieldGetJavaType(keyField), CGPFieldGetJavaType(valueField));
+  CGPMapFieldEntry *entry = data->header.next;
+  while (entry != &data->header) {
+    [builder appendFormat:@"%s%s: {\n", padding, fieldName];
+    ValueToString(entry->key, keyField, builder, innerPadding, indent + 1);
+    ValueToString(entry->value, valueField, builder, innerPadding, indent + 1);
+    [builder appendFormat:@"%s}\n", padding];
+    entry = entry->next;
+  }
+}
+
 static void FieldToString(
     id msg, CGPFieldDescriptor *field, NSMutableString *builder, char *padding, int indent) {
   Class msgCls = object_getClass(msg);
@@ -2067,7 +2895,7 @@ static void FieldToString(
       return;
     }
   } else {
-    if (!GetHasBit(msg, GetHasBitLocator(msgCls, field))) {
+    if (!GetHas(msg, GetHasLocator(msgCls, field))) {
       return;
     }
   }
@@ -2112,7 +2940,6 @@ static void FieldToString(
       FIELD_TO_STRING_CASE(id, "%@", BytesToString(value))
     case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_STRING:
       FIELD_TO_STRING_CASE(id, "\"%@\"", value)
-      return;
     case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_GROUP:
     case ComGoogleProtobufDescriptors_FieldDescriptor_Type_Enum_MESSAGE:
       if (repeated) {
@@ -2141,7 +2968,12 @@ static void MessageToString(
   NSUInteger fieldsCount = descriptor->fields_->size_;
   CGPFieldDescriptor **fieldsBuf = descriptor->fields_->buffer_;
   for (NSUInteger i = 0; i < fieldsCount; i++) {
-    FieldToString(msg, fieldsBuf[i], builder, padding, indent);
+    CGPFieldDescriptor *field = fieldsBuf[i];
+    if (CGPFieldIsMap(field)) {
+      MapFieldToString(msg, field, builder, padding, indent);
+    } else {
+      FieldToString(msg, field, builder, padding, indent);
+    }
   }
   CGPExtensionMap *extensionMap = MessageExtensionMap(msg, descriptor);
   if (extensionMap != NULL) {
@@ -2198,23 +3030,30 @@ static BOOL MessageIsEqual(id msg, id other, CGPDescriptor *descriptor) {
     CGPFieldDescriptor *field = fields[i];
     size_t offset = CGPFieldGetOffset(field, msgCls);
     CGPFieldJavaType type = CGPFieldGetJavaType(field);
-    if (CGPFieldIsRepeated(field)) {
-      CGPRepeatedField *msgRepeatedField = REPEATED_FIELD_PTR(msg, offset);
-      CGPRepeatedField *otherRepeatedField = REPEATED_FIELD_PTR(other, offset);
-      if (CGPRepeatedFieldIsEqual(msgRepeatedField, otherRepeatedField, type)) {
-        continue;
-      } else {
+    if (CGPFieldIsMap(field)) {
+      CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+      CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+      CGPMapField *msgMapField = MAP_FIELD_PTR(msg, offset);
+      CGPMapField *otherMapField = MAP_FIELD_PTR(other, offset);
+      if (!CGPMapFieldIsEqual(msgMapField, otherMapField, keyType, valueType)) {
         return NO;
       }
-    }
-    CGPHasBitLocator hasLoc = GetHasBitLocator(msgCls, field);
-    bool msgHasField = GetHasBit(msg, hasLoc);
-    bool otherHasField = GetHasBit(other, hasLoc);
-    if (msgHasField != otherHasField) {
-      return NO;
-    }
-    if (msgHasField && !FieldIsEqual(msg, other, offset, type)) {
-      return NO;
+    } else if (CGPFieldIsRepeated(field)) {
+      CGPRepeatedField *msgRepeatedField = REPEATED_FIELD_PTR(msg, offset);
+      CGPRepeatedField *otherRepeatedField = REPEATED_FIELD_PTR(other, offset);
+      if (!CGPRepeatedFieldIsEqual(msgRepeatedField, otherRepeatedField, type)) {
+        return NO;
+      }
+    } else {
+      CGPHasLocator hasLoc = GetHasLocator(msgCls, field);
+      bool msgHasField = GetHas(msg, hasLoc);
+      bool otherHasField = GetHas(other, hasLoc);
+      if (msgHasField != otherHasField) {
+        return NO;
+      }
+      if (msgHasField && !FieldIsEqual(msg, other, offset, type)) {
+        return NO;
+      }
     }
   }
   NSCAssert(msgCls == descriptor->messageClass_, @"Message type expected.");
@@ -2226,12 +3065,17 @@ static BOOL MessageIsEqual(id msg, id other, CGPDescriptor *descriptor) {
   return YES;
 }
 
-#define HASH_Int(value) value
-#define HASH_Long(value) (int)((uint64_t)value ^ ((uint64_t)value >> 32))
-#define HASH_Float(value) *(int *)&value
-#define HASH_Double(value) (int)(*(uint64_t *)&value ^ (*(uint64_t *)&value >> 32))
-#define HASH_Bool(value) (value ? 1231 : 1237)
-#define HASH_Id(value) (int)[value hash]
+static int MapFieldHash(id msg, CGPFieldDescriptor *field, int hash) {
+  size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
+  CGPMapField *mapField = MAP_FIELD_PTR(msg, offset);
+  if (CGPMapFieldIsEmpty(mapField)) {
+    return hash;
+  }
+  hash = 37 * hash + CGPFieldGetNumber(field);
+  CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(field));
+  CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(field));
+  return 53 * hash + CGPMapFieldHash(mapField, keyType, valueType);
+}
 
 static int RepeatedFieldHash(id msg, CGPFieldDescriptor *field, int hash) {
   size_t offset = CGPFieldGetOffset(field, object_getClass(msg));
@@ -2261,7 +3105,7 @@ static int RepeatedFieldHash(id msg, CGPFieldDescriptor *field, int hash) {
 
 static int SingularFieldHash(id msg, CGPFieldDescriptor *field, int hash) {
   Class msgCls = object_getClass(msg);
-  if (!GetHasBit(msg, GetHasBitLocator(msgCls, field))) {
+  if (!GetHas(msg, GetHasLocator(msgCls, field))) {
     return hash;
   }
   size_t offset = CGPFieldGetOffset(field, msgCls);
@@ -2291,7 +3135,9 @@ static int MessageHash(ComGoogleProtobufGeneratedMessage *msg, CGPDescriptor *de
   CGPFieldDescriptor **fields = descriptor->fields_->buffer_;
   for (NSUInteger i = 0; i < count; i++) {
     CGPFieldDescriptor *field = fields[i];
-    if (CGPFieldIsRepeated(field)) {
+    if (CGPFieldIsMap(field)) {
+      hash = MapFieldHash(msg, field, hash);
+    } else if (CGPFieldIsRepeated(field)) {
       hash = RepeatedFieldHash(msg, field, hash);
     } else {
       hash = SingularFieldHash(msg, field, hash);
@@ -2430,6 +3276,7 @@ static int MessageHash(ComGoogleProtobufGeneratedMessage *msg, CGPDescriptor *de
   CGPDescriptor *descriptor = [object_getClass(self) getDescriptor];
   CGPCodedOutputStream codedStream(output);
   WriteMessage(self, descriptor, &codedStream);
+  codedStream.FlushBuffer();
   NSAssert(!codedStream.HadError(), @"Serialization error");
 }
 
@@ -2438,6 +3285,7 @@ static int MessageHash(ComGoogleProtobufGeneratedMessage *msg, CGPDescriptor *de
   CGPCodedOutputStream codedStream(output);
   CGPWriteInt32(SerializedSizeForMessage(self, descriptor), &codedStream);
   WriteMessage(self, descriptor, &codedStream);
+  codedStream.FlushBuffer();
   NSAssert(!codedStream.HadError(), @"Serialization error");
 }
 
@@ -2597,15 +3445,17 @@ J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage)
 - (id<ComGoogleProtobufMessage_Builder>)
     setFieldWithComGoogleProtobufDescriptors_FieldDescriptor:(CGPFieldDescriptor *)descriptor
                                                       withId:(id)object {
-  nil_chk(descriptor);
-  nil_chk(object);
+  (void)nil_chk(descriptor);
+  (void)nil_chk(object);
   CGPFieldJavaType javaType = CGPFieldGetJavaType(descriptor);
   Class cls = object_getClass(self);
   size_t offset = CGPFieldGetOffset(descriptor, cls);
-  if (CGPFieldIsRepeated(descriptor)) {
+  if (CGPFieldIsMap(descriptor)) {
+    CGPMapFieldAssignFromList(MAP_FIELD_PTR(self, offset), object, descriptor);
+  } else if (CGPFieldIsRepeated(descriptor)) {
     CGPRepeatedFieldAssignFromList(REPEATED_FIELD_PTR(self, offset), object, javaType);
   } else {
-    CGPHasBitLocator hasLoc = GetHasBitLocator(cls, descriptor);
+    CGPHasLocator hasLoc = GetHasLocator(cls, descriptor);
 
 #define SET_SINGULAR_FIELD_CASE(NAME) \
   SingularSet##NAME(self, CGPFromReflectionType##NAME(object), offset, hasLoc); \
@@ -2622,20 +3472,27 @@ J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage)
 - (id<ComGoogleProtobufMessage_Builder>)
     addRepeatedFieldWithComGoogleProtobufDescriptors_FieldDescriptor:
     (CGPFieldDescriptor *)descriptor withId:(id)object {
-  nil_chk(object);
+  (void)nil_chk(object);
   size_t offset = CGPFieldGetOffset(descriptor, object_getClass(self));
-  CGPRepeatedField *field = REPEATED_FIELD_PTR(self, offset);
-  CGPRepeatedFieldAdd(field, object, CGPFieldGetJavaType(descriptor));
+  if (CGPFieldIsMap(descriptor)) {
+    CGPMapFieldAdd(MAP_FIELD_PTR(self, offset), object, descriptor);
+  } else {
+    CGPRepeatedFieldAdd(REPEATED_FIELD_PTR(self, offset), object, CGPFieldGetJavaType(descriptor));
+  }
   return self;
 }
 
 - (id<ComGoogleProtobufMessage_Builder>)
     setRepeatedFieldWithComGoogleProtobufDescriptors_FieldDescriptor:
     (CGPFieldDescriptor *)descriptor withInt:(jint)index withId:(id)object {
-  nil_chk(object);
+  (void)nil_chk(object);
   size_t offset = CGPFieldGetOffset(descriptor, object_getClass(self));
-  CGPRepeatedField *field = REPEATED_FIELD_PTR(self, offset);
-  CGPRepeatedFieldSet(field, index, object, CGPFieldGetJavaType(descriptor));
+  if (CGPFieldIsMap(descriptor)) {
+    CGPMapFieldSet(MAP_FIELD_PTR(self, offset), index, object, descriptor);
+  } else {
+    CGPRepeatedFieldSet(
+        REPEATED_FIELD_PTR(self, offset), index, object, CGPFieldGetJavaType(descriptor));
+  }
   return self;
 }
 
@@ -2643,12 +3500,15 @@ J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage)
     clearFieldWithComGoogleProtobufDescriptors_FieldDescriptor:(CGPFieldDescriptor *)descriptor {
   Class cls = object_getClass(self);
   size_t offset = CGPFieldGetOffset(descriptor, cls);
-  if (CGPFieldIsRepeated(descriptor)) {
+  if (CGPFieldIsMap(descriptor)) {
+    CGPFieldJavaType keyType = CGPFieldGetJavaType(CGPFieldMapKey(descriptor));
+    CGPFieldJavaType valueType = CGPFieldGetJavaType(CGPFieldMapValue(descriptor));
+    CGPMapFieldClear(MAP_FIELD_PTR(self, offset), keyType, valueType);
+  } else if (CGPFieldIsRepeated(descriptor)) {
     CGPRepeatedFieldClear(REPEATED_FIELD_PTR(self, offset), CGPFieldGetJavaType(descriptor));
   } else {
-    CGPHasBitLocator hasLoc = GetHasBitLocator(cls, descriptor);
-    UnsetHasBit(self, hasLoc);
-    if (CGPIsRetainedType(CGPFieldGetJavaType(descriptor))) {
+    CGPHasLocator hasLoc = GetHasLocator(cls, descriptor);
+    if (UnsetHas(self, hasLoc) && CGPIsRetainedType(CGPFieldGetJavaType(descriptor))) {
       id *ptr = FIELD_PTR(id, self, offset);
       [*ptr autorelease];
       *ptr = nil;
@@ -2895,9 +3755,23 @@ J2OBJC_INTERFACE_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage_Extendabl
     (ComGoogleProtobufExtensionLite *)extension {
   return GetSingularExtension(&extensionMap_, extension);
 }
+- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return GetSingularExtension(&extensionMap_, extension);
+}
+- (id)getExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
+  return GetSingularExtension(&extensionMap_, extension);
+}
 
 - (id)getExtensionWithComGoogleProtobufExtensionLite:
     (ComGoogleProtobufExtensionLite *)extension withInt:(jint)index {
+  return GetRepeatedExtension(&extensionMap_, extension, index);
+}
+- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withInt:(jint)index {
+  return GetRepeatedExtension(&extensionMap_, extension, index);
+}
+- (id)getExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension withInt:(jint)index {
   return GetRepeatedExtension(&extensionMap_, extension, index);
 }
 
@@ -2905,26 +3779,23 @@ J2OBJC_INTERFACE_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage_Extendabl
     (ComGoogleProtobufExtensionLite *)extension {
   return GetExtensionCount(extension, &extensionMap_);
 }
+- (jint)getExtensionCountWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return GetExtensionCount(extension, &extensionMap_);
+}
+- (jint)getExtensionCountWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
+  return GetExtensionCount(extension, &extensionMap_);
+}
 
 - (jboolean)hasExtensionWithComGoogleProtobufExtensionLite:
     (ComGoogleProtobufExtensionLite *)extension {
   return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
 }
-
-// Support older API that accepts Extension instead of ExtensionLite
-- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
-  return GetSingularExtension(&extensionMap_, extension);
-}
-
-- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withInt:(jint)index {
-  return GetRepeatedExtension(&extensionMap_, extension, index);
-}
-
-- (jint)getExtensionCountWithComGoogleProtobufExtension:(CGPExtension *)extension {
-  return GetExtensionCount(extension, &extensionMap_);
-}
-
 - (jboolean)hasExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
+}
+- (jboolean)hasExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
   return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
 }
 
@@ -2949,9 +3820,23 @@ J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage_ExtendableMes
     (ComGoogleProtobufExtensionLite *)extension {
   return GetSingularExtension(&extensionMap_, extension);
 }
+- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return GetSingularExtension(&extensionMap_, extension);
+}
+- (id)getExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
+  return GetSingularExtension(&extensionMap_, extension);
+}
 
 - (id)getExtensionWithComGoogleProtobufExtensionLite:
     (ComGoogleProtobufExtensionLite *)extension withInt:(jint)index {
+  return GetRepeatedExtension(&extensionMap_, extension, index);
+}
+- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withInt:(jint)index {
+  return GetRepeatedExtension(&extensionMap_, extension, index);
+}
+- (id)getExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension withInt:(jint)index {
   return GetRepeatedExtension(&extensionMap_, extension, index);
 }
 
@@ -2959,27 +3844,55 @@ J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage_ExtendableMes
     (ComGoogleProtobufExtensionLite *)extension {
   return GetExtensionCount(extension, &extensionMap_);
 }
+- (jint)getExtensionCountWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return GetExtensionCount(extension, &extensionMap_);
+}
+- (jint)getExtensionCountWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
+  return GetExtensionCount(extension, &extensionMap_);
+}
 
 - (jboolean)hasExtensionWithComGoogleProtobufExtensionLite:
     (ComGoogleProtobufExtensionLite *)extension {
   return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
 }
+- (jboolean)hasExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
+}
+- (jboolean)hasExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
+  return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
+}
 
 - (id)setExtensionWithComGoogleProtobufExtensionLite:
     (ComGoogleProtobufExtensionLite *)extension withId:(id)value {
-  nil_chk(value);
+  (void)nil_chk(value);
   CGPFieldDescriptor *field = extension->fieldDescriptor_;
   extensionMap_[field].set(ToReflectionType(field, value));
   return self;
 }
+- (id)setExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withId:(id)value {
+  return [self setExtensionWithComGoogleProtobufExtensionLite:extension withId:value];
+}
+- (id)setExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension withId:(id)value {
+  return [self setExtensionWithComGoogleProtobufExtensionLite:extension withId:value];
+}
 
 - (id)addExtensionWithComGoogleProtobufExtensionLite:
     (ComGoogleProtobufExtensionLite *)extension withId:(id)value {
-  nil_chk(value);
+  (void)nil_chk(value);
   CGPFieldDescriptor *field = extension->fieldDescriptor_;
   AddExtensionWithReflectionType(&extensionMap_, field,
       ToReflectionTypeSingular(CGPFieldGetJavaType(field), value));
   return self;
+}
+- (id)addExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withId:(id)value {
+  return [self addExtensionWithComGoogleProtobufExtensionLite:extension withId:value];
+}
+- (id)addExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension withId:(id)value {
+  return [self addExtensionWithComGoogleProtobufExtensionLite:extension withId:value];
 }
 
 - (id)clearExtensionWithComGoogleProtobufExtensionLite:
@@ -2987,33 +3900,11 @@ J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufGeneratedMessage_ExtendableMes
   extensionMap_.erase(extension->fieldDescriptor_);
   return self;
 }
-
-// Support older API that accepts Extension instead of ExtensionLite
-- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
-  return GetSingularExtension(&extensionMap_, extension);
-}
-
-- (id)getExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withInt:(jint)index {
-  return GetRepeatedExtension(&extensionMap_, extension, index);
-}
-
-- (jint)getExtensionCountWithComGoogleProtobufExtension:(CGPExtension *)extension {
-  return GetExtensionCount(extension, &extensionMap_);
-}
-
-- (jboolean)hasExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
-  return extensionMap_.find(extension->fieldDescriptor_) != extensionMap_.end();
-}
-
-- (id)setExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withId:(id)value {
-  return [self setExtensionWithComGoogleProtobufExtensionLite:extension withId:value];
-}
-
-- (id)addExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension withId:(id)value {
-  return [self addExtensionWithComGoogleProtobufExtensionLite:extension withId:value];
-}
-
 - (id)clearExtensionWithComGoogleProtobufExtension:(CGPExtension *)extension {
+  return [self clearExtensionWithComGoogleProtobufExtensionLite:extension];
+}
+- (id)clearExtensionWithComGoogleProtobufGeneratedMessage_GeneratedExtension:
+    (CGPGeneratedExtension *)extension {
   return [self clearExtensionWithComGoogleProtobufExtensionLite:extension];
 }
 

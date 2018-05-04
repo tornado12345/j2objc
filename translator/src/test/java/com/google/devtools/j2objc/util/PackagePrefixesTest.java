@@ -17,7 +17,6 @@
 package com.google.devtools.j2objc.util;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 
@@ -40,9 +39,9 @@ public class PackagePrefixesTest extends GenerationTest {
     StringReader reader = new StringReader(prefixes);
     Properties properties = new Properties();
     properties.load(reader);
-    PackagePrefixes prefixMap = Options.getPackagePrefixes();
-    assertFalse(prefixMap.hasPrefix("java.lang"));
-    assertFalse(prefixMap.hasPrefix("foo.bar"));
+    PackagePrefixes prefixMap = options.getPackagePrefixes();
+    assertNull(prefixMap.getPrefix("java.lang"));
+    assertNull(prefixMap.getPrefix("foo.bar"));
     prefixMap.addPrefixProperties(properties);
     assertEquals("JL", prefixMap.getPrefix("java.lang"));
     assertEquals("FB", prefixMap.getPrefix("foo.bar"));
@@ -59,7 +58,7 @@ public class PackagePrefixesTest extends GenerationTest {
     StringReader reader = new StringReader(prefixes);
     Properties properties = new Properties();
     properties.load(reader);
-    PackagePrefixes prefixMap = Options.getPackagePrefixes();
+    PackagePrefixes prefixMap = options.getPackagePrefixes();
     prefixMap.addPrefixProperties(properties);
     assertEquals("JL", prefixMap.getPrefix("java.lang"));
     assertEquals("FB", prefixMap.getPrefix("foo.bar"));
@@ -68,30 +67,30 @@ public class PackagePrefixesTest extends GenerationTest {
   // Verify class name with prefix.
   public void testGetFullNameWithPrefix() {
     String source = "package foo.bar; public class SomeClass {}";
-    Options.getPackagePrefixes().addPrefix("foo.bar", "FB");
+    options.getPackagePrefixes().addPrefix("foo.bar", "FB");
     CompilationUnit unit = translateType("SomeClass", source);
     NameTable nameTable = unit.getEnv().nameTable();
     AbstractTypeDeclaration decl = unit.getTypes().get(0);
-    assertEquals("FBSomeClass", nameTable.getFullName(decl.getTypeBinding()));
+    assertEquals("FBSomeClass", nameTable.getFullName(decl.getTypeElement()));
   }
 
   // Verify inner class name with prefix.
   public void testGetFullNameWithInnerClassAndPrefix() {
     String source = "package foo.bar; public class SomeClass { static class Inner {}}";
-    Options.getPackagePrefixes().addPrefix("foo.bar", "FB");
+    options.getPackagePrefixes().addPrefix("foo.bar", "FB");
     CompilationUnit unit = translateType("SomeClass", source);
     NameTable nameTable = unit.getEnv().nameTable();
     AbstractTypeDeclaration decl = unit.getTypes().get(1);
-    assertEquals("FBSomeClass_Inner", nameTable.getFullName(decl.getTypeBinding()));
+    assertEquals("FBSomeClass_Inner", nameTable.getFullName(decl.getTypeElement()));
   }
 
   public void testPackageWildcards() throws IOException {
     String source = "package foo.bar; public class SomeClass {}";
-    Options.getPackagePrefixes().addPrefix("foo.*", "FB");
+    options.getPackagePrefixes().addPrefix("foo.*", "FB");
     CompilationUnit unit = translateType("SomeClass", source);
     NameTable nameTable = unit.getEnv().nameTable();
     AbstractTypeDeclaration decl = unit.getTypes().get(0);
-    assertEquals("FBSomeClass", nameTable.getFullName(decl.getTypeBinding()));
+    assertEquals("FBSomeClass", nameTable.getFullName(decl.getTypeElement()));
   }
 
   public void testWildcardToRegex() throws IOException {

@@ -22,7 +22,6 @@
 #import "J2ObjC_common.h"
 #import "JavaObject.h"
 #import "NSCopying+JavaCloneable.h"
-#import "NSException+JavaThrowable.h"
 #import "NSNumber+JavaNumber.h"
 #import "NSObject+JavaObject.h"
 #import "NSString+JavaString.h"
@@ -39,7 +38,7 @@
 __attribute__ ((unused)) static inline id cast_chk(id __unsafe_unretained p, Class clazz) {
 #if !defined(J2OBJC_DISABLE_CAST_CHECKS)
   if (__builtin_expect(p && ![p isKindOfClass:clazz], 0)) {
-    JreThrowClassCastException();
+    JreThrowClassCastException(p, clazz);
   }
 #endif
   return p;
@@ -51,7 +50,7 @@ __attribute__ ((unused)) static inline id cast_chk(id __unsafe_unretained p, Cla
 __attribute__((always_inline)) inline id cast_check(id __unsafe_unretained p, IOSClass *cls) {
 #if !defined(J2OBJC_DISABLE_CAST_CHECKS)
   if (__builtin_expect(p && ![cls isInstance:p], 0)) {
-    JreThrowClassCastException();
+    JreThrowClassCastExceptionWithIOSClass(p, cls);
   }
 #endif
   return p;
@@ -81,6 +80,7 @@ __attribute__((always_inline)) inline void JreCheckFinalize(id self, Class cls) 
 }
 
 FOUNDATION_EXPORT jint JreIndexOfStr(NSString *str, NSString **values, jint size);
+FOUNDATION_EXPORT NSString *JreEnumConstantName(IOSClass *enumClass, jint ordinal);
 
 /*!
  * Macros that simplify the syntax for loading of static fields.
@@ -143,12 +143,6 @@ FOUNDATION_EXPORT jint JreIndexOfStr(NSString *str, NSString **values, jint size
   return self;
 #endif
 
-// Defined in J2ObjC_common.m
-FOUNDATION_EXPORT id CreateNonCapturing(const char *lambdaName, jint numProtocols,
-    Protocol *protocols[], jint numMethods, SEL selectors[], IMP impls[], const char *signatures[]);
-FOUNDATION_EXPORT Class CreatePossiblyCapturingClass(const char *lambdaName, jint numProtocols,
-    Protocol *protocols[], jint numMethods, SEL selectors[], IMP impls[], const char *signatures[]);
-
 #define J2OBJC_IGNORE_DESIGNATED_BEGIN \
   _Pragma("clang diagnostic push") \
   _Pragma("clang diagnostic ignored \"-Wobjc-designated-initializers\"")
@@ -159,17 +153,26 @@ FOUNDATION_EXPORT Class CreatePossiblyCapturingClass(const char *lambdaName, jin
  * Returns correct result when casting a double to an integral type. In C, a
  * float >= Integer.MAX_VALUE (allowing for rounding) returns 0x80000000,
  * while Java requires 0x7FFFFFFF.  A double >= Long.MAX_VALUE returns
- * 0x8000000000000000L, while Java requires 0x7FFFFFFFFFFFFFFFL.
+ * 0x8000000000000000L, while Java requires 0x7FFFFFFFFFFFFFFFL. Also in C, a
+ * floating point NaN value casts to the equivalent MIN_VALUE while Java
+ * requires that NaN casts to 0. (JLS 5.1.3)
  */
-__attribute__((always_inline)) inline jint JreFpToInt(jdouble d) {
+__attribute__((always_inline))
+__attribute__((no_sanitize("float-cast-overflow")))
+inline jint JreFpToInt(jdouble d) {
   jint tmp = (jint)d;
-  return tmp == (jint)0x80000000 ? (d >= 0 ? 0x7FFFFFFF : tmp) : tmp;
+  return tmp == (jint)0x80000000 ? (d != d ? 0 : (d >= 0 ? 0x7FFFFFFF : tmp)) : tmp;
 }
-__attribute__((always_inline)) inline jlong JreFpToLong(jdouble d) {
+__attribute__((always_inline))
+__attribute__((no_sanitize("float-cast-overflow")))
+inline jlong JreFpToLong(jdouble d) {
   jlong tmp = (jlong)d;
-  return tmp == (jlong)0x8000000000000000LL ? (d >= 0 ? 0x7FFFFFFFFFFFFFFFL : tmp) : tmp;
+  return tmp == (jlong)0x8000000000000000LL
+      ? (d != d ? 0 : (d >= 0 ? 0x7FFFFFFFFFFFFFFFL : tmp)) : tmp;
 }
-__attribute__((always_inline)) inline jchar JreFpToChar(jdouble d) {
+__attribute__((always_inline))
+__attribute__((no_sanitize("float-cast-overflow")))
+inline jchar JreFpToChar(jdouble d) {
   unsigned tmp = (unsigned)d;
   return tmp > 0xFFFF || (tmp == 0 && d > 0) ? 0xFFFF : (jchar)tmp;
 }

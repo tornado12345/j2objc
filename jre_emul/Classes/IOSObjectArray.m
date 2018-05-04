@@ -35,7 +35,10 @@ static IOSObjectArray *IOSObjectArray_CreateArray(jint length, IOSClass *type, j
   if (length < 0) {
     @throw AUTORELEASE([[JavaLangNegativeArraySizeException alloc] init]);
   }
-  IOSObjectArray *array = NSAllocateObject([IOSObjectArray class], length * sizeof(id), nil);
+  size_t buf_size = length * sizeof(id);
+  IOSObjectArray *array = NSAllocateObject([IOSObjectArray class], buf_size, nil);
+  // Set array contents to Java default value (null).
+  memset(array->buffer_, 0, buf_size);
   if (!retained) {
     // It is important that this autorelease occurs here and NOT as part of the
     // return statement of one of the public methods. When such a public method
@@ -286,10 +289,12 @@ static void DoRetainedMove(id __strong *buffer, jint src, jint dest, jint length
 
 - (id)retain {
   if (!isRetained_) {
+    // Set isRetained_ before retaining the elements to avoid infinite loop if two arrays happen to
+    // contain each other.
+    isRetained_ = true;
     for (jint i = 0; i < size_; i++) {
       [buffer_[i] retain];
     }
-    isRetained_ = true;
   }
   return [super retain];
 }

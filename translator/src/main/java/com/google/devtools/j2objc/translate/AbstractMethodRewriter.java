@@ -29,11 +29,9 @@ import com.google.devtools.j2objc.types.GeneratedExecutableElement;
 import com.google.devtools.j2objc.types.GeneratedVariableElement;
 import com.google.devtools.j2objc.util.CodeReferenceMap;
 import com.google.devtools.j2objc.util.ElementUtil;
-import com.google.devtools.j2objc.util.TranslationUtil;
 import com.google.devtools.j2objc.util.TypeUtil;
 import java.util.HashMap;
 import java.util.Map;
-import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
@@ -78,7 +76,7 @@ public class AbstractMethodRewriter extends UnitTreeVisitor {
     // There's no need to stub out an abstract method for an interface's companion class.
     // Similarly, if this is an abstract method in a class and there's no need for reflection,
     // we skip the stubbing out.
-    if (!TranslationUtil.needsReflection(declaringClass)) {
+    if (!translationUtil.needsReflection(declaringClass)) {
       unit.setHasIncompleteProtocol();
       unit.setHasIncompleteImplementation();
       return;
@@ -88,7 +86,7 @@ public class AbstractMethodRewriter extends UnitTreeVisitor {
     // Generate a body which throws a NSInvalidArgumentException.
     String bodyCode = "// can't call an abstract method\n"
         + "[self doesNotRecognizeSelector:_cmd];";
-    if (!TypeUtil.isVoid(node.getReturnType().getTypeMirror())) {
+    if (!TypeUtil.isVoid(node.getReturnTypeMirror())) {
       bodyCode += "\nreturn 0;"; // Never executes, but avoids a gcc warning.
     }
     body.addStatement(new NativeStatement(bodyCode));
@@ -128,8 +126,11 @@ public class AbstractMethodRewriter extends UnitTreeVisitor {
     Map<String, ExecutablePair> newDeclarations = new HashMap<>();
     Map<String, TypeMirror> resolvedReturnTypes = new HashMap<>();
     for (DeclaredType inheritedType : typeUtil.getObjcOrderedInheritedTypes(type.asType())) {
-      for (ExecutableElement methodElem : ElementUtil.filterEnclosedElements(
-          inheritedType.asElement(), ExecutableElement.class, ElementKind.METHOD)) {
+      TypeElement inheritedElem = (TypeElement) inheritedType.asElement();
+      for (ExecutableElement methodElem : ElementUtil.getMethods(inheritedElem)) {
+        if (ElementUtil.isPrivate(methodElem)) {
+          continue;
+        }
         TypeMirror declaredReturnType = typeUtil.erasure(methodElem.getReturnType());
         if (!TypeUtil.isReferenceType(declaredReturnType)) {
           continue;  // Short circuit

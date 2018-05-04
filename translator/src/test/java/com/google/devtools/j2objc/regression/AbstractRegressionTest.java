@@ -18,12 +18,8 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.Lists;
 import com.google.devtools.j2objc.GenerationTest;
 import com.google.devtools.j2objc.J2ObjC;
-import com.google.devtools.j2objc.Options;
-import com.google.devtools.j2objc.util.SourceVersion;
-
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
@@ -51,23 +47,17 @@ public abstract class AbstractRegressionTest extends GenerationTest {
   String methodName = null;
   public static int testCount = 0;
 
-  static final String j2objccLocation = System.getProperty("j2objcc.path", "j2objcc");
-
-  @Override
-  protected void loadOptions() throws IOException {
-    super.loadOptions();
-    Options.setSourceVersion(SourceVersion.JAVA_8);
-  }
+  static final String J2OBJCC_LOCATION = System.getProperty("j2objcc.path", "j2objcc");
 
   public String writeFileFromString(String filename, String content) {
     PrintWriter out;
     File file = new File(tempDir, filename);
     try {
       new File(file.getParent()).mkdirs();
-      out = new PrintWriter(file);
+      out = new PrintWriter(file, "UTF-8");
       out.print(content);
       out.close();
-    } catch (FileNotFoundException e) {
+    } catch (IOException e) {
       fail("Unable to write file " + filename);
     }
     return file.getAbsolutePath();
@@ -148,7 +138,7 @@ public abstract class AbstractRegressionTest extends GenerationTest {
     System.out.println(buffer.toString());
     fail(buffer.toString());
   }
-  
+
   public void checkMatch(String[] ls, String res, String output, List<String> mFileArgs) {
     res = res.trim();
     if (output != null) {
@@ -167,9 +157,10 @@ public abstract class AbstractRegressionTest extends GenerationTest {
     StackTraceElement[] st = Thread.currentThread().getStackTrace();
     methodName = st[2].getMethodName();
     List<String> fileArgs = writeFiles(ls);
-    J2ObjC.run(fileArgs);
+
+    J2ObjC.run(fileArgs, options);
     List<String> mFileArgs = getImplementationFileList(fileArgs);
-    String command = j2objccLocation + " -g -I. -ObjC -o " + tempDir + "/regressiontesting "
+    String command = J2OBJCC_LOCATION + " -g -I. -ObjC -o " + tempDir + "/regressiontesting "
         + Joiner.on(' ').join(mFileArgs);
     String compileOutput = runCommand(command);
     if (compileOutput.indexOf("error: ") != -1) {

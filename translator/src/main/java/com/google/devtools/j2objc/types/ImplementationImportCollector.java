@@ -21,6 +21,7 @@ import com.google.devtools.j2objc.ast.Assignment;
 import com.google.devtools.j2objc.ast.CastExpression;
 import com.google.devtools.j2objc.ast.CatchClause;
 import com.google.devtools.j2objc.ast.CompilationUnit;
+import com.google.devtools.j2objc.ast.EnhancedForStatement;
 import com.google.devtools.j2objc.ast.EnumDeclaration;
 import com.google.devtools.j2objc.ast.Expression;
 import com.google.devtools.j2objc.ast.FieldAccess;
@@ -35,6 +36,7 @@ import com.google.devtools.j2objc.ast.NativeDeclaration;
 import com.google.devtools.j2objc.ast.NativeExpression;
 import com.google.devtools.j2objc.ast.NormalAnnotation;
 import com.google.devtools.j2objc.ast.QualifiedName;
+import com.google.devtools.j2objc.ast.ReturnStatement;
 import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.SingleMemberAnnotation;
 import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
@@ -47,18 +49,16 @@ import com.google.devtools.j2objc.ast.UnionType;
 import com.google.devtools.j2objc.ast.UnitTreeVisitor;
 import com.google.devtools.j2objc.ast.VariableDeclarationExpression;
 import com.google.devtools.j2objc.ast.VariableDeclarationStatement;
-import com.google.devtools.j2objc.jdt.BindingConverter;
-import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.ElementUtil;
+import com.google.devtools.j2objc.util.TypeUtil;
+import java.lang.reflect.Modifier;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
-import org.eclipse.jdt.core.dom.Modifier;
 
 /**
  * Collects the set of imports needed to resolve type references in an
@@ -95,11 +95,6 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
   }
 
   private void addImports(TypeMirror type) {
-    Import.addImports(
-        BindingConverter.unwrapTypeMirrorIntoTypeBinding(type), imports, unit.getEnv());
-  }
-
-  private void addImports(ITypeBinding type) {
     Import.addImports(type, imports, unit.getEnv());
   }
 
@@ -111,7 +106,7 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
 
   @Override
   public boolean visit(AnnotationTypeDeclaration node) {
-    addImports(node.getTypeBinding());
+    addImports(node.getTypeElement());
     return true;
   }
 
@@ -128,8 +123,13 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
   }
 
   @Override
+  public void endVisit(EnhancedForStatement node) {
+    addImports(node.getExpression().getTypeMirror());
+  }
+
+  @Override
   public boolean visit(EnumDeclaration node) {
-    addImports(node.getTypeBinding());
+    addImports(node.getTypeElement());
     return true;
   }
 
@@ -141,7 +141,7 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
 
   @Override
   public boolean visit(FieldDeclaration node) {
-    addImports(node.getType());
+    addImports(node.getTypeMirror());
     return true;
   }
 
@@ -182,14 +182,13 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
     if (Modifier.isAbstract(node.getModifiers())) {
       return false;
     }
-    addImports(node.getReturnType());
+    addImports(node.getReturnTypeMirror());
     return true;
   }
 
   @Override
   public boolean visit(MethodInvocation node) {
-    IMethodBinding binding = node.getMethodBinding();
-    addImports(binding.getReturnType());
+    addImports(node.getExecutableType().getReturnType());
     Expression receiver = node.getExpression();
     if (receiver != null) {
       addImports(receiver.getTypeMirror());
@@ -219,10 +218,10 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
 
   @Override
   public boolean visit(QualifiedName node) {
-    IVariableBinding var = TreeUtil.getVariableBinding(node);
+    VariableElement var = TreeUtil.getVariableElement(node);
     if (var != null) {
-      if (BindingUtil.isGlobalVar(var)) {
-        addImports(var.getDeclaringClass());
+      if (ElementUtil.isGlobalVar(var)) {
+        addImports(ElementUtil.getDeclaringClass(var));
         return false;
       } else {
         addImports(node.getQualifier().getTypeMirror());
@@ -232,10 +231,18 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
   }
 
   @Override
+  public void endVisit(ReturnStatement node) {
+    Expression expr = node.getExpression();
+    if (expr != null) {
+      addImports(expr.getTypeMirror());
+    }
+  }
+
+  @Override
   public boolean visit(SimpleName node) {
-    IVariableBinding var = TreeUtil.getVariableBinding(node);
-    if (var != null && BindingUtil.isGlobalVar(var)) {
-      addImports(var.getDeclaringClass());
+    VariableElement var = TreeUtil.getVariableElement(node);
+    if (var != null && ElementUtil.isGlobalVar(var)) {
+      addImports(ElementUtil.getDeclaringClass(var));
     }
     return true;
   }
@@ -247,21 +254,21 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
 
   @Override
   public boolean visit(SingleVariableDeclaration node) {
-    addImports(node.getVariableBinding().getType());
+    addImports(node.getVariableElement().asType());
     return true;
   }
 
   @Override
   public boolean visit(TryStatement node) {
     if (!node.getResources().isEmpty()) {
-      addImports(typeEnv.resolveJavaType("java.lang.Throwable"));
+      addImports(typeUtil.resolveJavaType("java.lang.Throwable"));
     }
     return true;
   }
 
   @Override
   public boolean visit(TypeDeclaration node) {
-    addImports(node.getTypeBinding());
+    addImports(node.getTypeElement());
     return true;
   }
 
@@ -269,9 +276,9 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
   public boolean visit(TypeLiteral node) {
     TypeMirror type = node.getType().getTypeMirror();
     if (type.getKind().isPrimitive()) {
-      addImports(typeEnv.resolveIOSType("IOSClass"));
+      addImports(TypeUtil.IOS_CLASS);
     } else if (type.getKind().equals(TypeKind.ARRAY)) {
-      addImports(typeEnv.resolveIOSType("IOSClass"));
+      addImports(TypeUtil.IOS_CLASS);
       addImports(((ArrayType) type).getComponentType());
     } else {
       addImports(node.getType());
@@ -287,7 +294,7 @@ public class ImplementationImportCollector extends UnitTreeVisitor {
 
   @Override
   public boolean visit(VariableDeclarationStatement node) {
-    addImports(node.getType());
+    addImports(node.getTypeMirror());
     return true;
   }
 }

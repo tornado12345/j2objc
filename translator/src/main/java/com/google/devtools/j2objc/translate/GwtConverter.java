@@ -18,7 +18,6 @@ package com.google.devtools.j2objc.translate;
 
 import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.Sets;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.Annotation;
 import com.google.devtools.j2objc.ast.Block;
 import com.google.devtools.j2objc.ast.BooleanLiteral;
@@ -29,7 +28,6 @@ import com.google.devtools.j2objc.ast.Expression;
 import com.google.devtools.j2objc.ast.IfStatement;
 import com.google.devtools.j2objc.ast.MethodDeclaration;
 import com.google.devtools.j2objc.ast.MethodInvocation;
-import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.SingleMemberAnnotation;
 import com.google.devtools.j2objc.ast.Statement;
 import com.google.devtools.j2objc.ast.StringLiteral;
@@ -110,7 +108,7 @@ public class GwtConverter extends UnitTreeVisitor {
 
   @Override
   public boolean visit(MethodDeclaration node) {
-    if (Options.stripGwtIncompatibleMethods() && isIncompatible(node.getAnnotations())) {
+    if (options.stripGwtIncompatibleMethods() && isIncompatible(node.getAnnotations())) {
       // Remove method from its declaring class.
       node.remove();
       return false;
@@ -126,14 +124,12 @@ public class GwtConverter extends UnitTreeVisitor {
         && ElementUtil.getQualifiedName(ElementUtil.getDeclaringClass(method)).equals(GWT_CLASS)
         && args.size() == 1) {
       // Convert GWT.create(Foo.class) to Foo.class.newInstance().
-      ExecutableElement newMethod = ElementUtil.findMethod(
-          typeEnv.resolveJavaTypeElement("java.lang.Class"), "newInstance");
-      node.setName(new SimpleName(newMethod));
+      ExecutableElement newMethod = ElementUtil.findMethod(typeUtil.getJavaClass(), "newInstance");
       Expression clazz = args.remove(0);
       node.setExpression(clazz);
       node.setExecutablePair(new ExecutablePair(newMethod));
     } else if (isGwtTest(node)) {
-      node.replaceWith(new BooleanLiteral(false, typeEnv));
+      node.replaceWith(new BooleanLiteral(false, typeUtil));
     }
     return true;
   }

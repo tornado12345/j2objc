@@ -15,9 +15,6 @@
 package com.google.devtools.j2objc.translate;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
-import com.google.devtools.j2objc.util.SourceVersion;
-
 import java.io.IOException;
 
 /**
@@ -26,11 +23,6 @@ import java.io.IOException;
  * @author Lukhnos Liu
  */
 public class DefaultMethodsTest extends GenerationTest {
-  @Override
-  protected void loadOptions() throws IOException {
-    super.loadOptions();
-    Options.setSourceVersion(SourceVersion.JAVA_8);
-  }
 
   public void testDefaultMethodFunctionalization() throws IOException {
     String source = "interface Foo { void f(); default void g() { f(); } }";
@@ -44,7 +36,7 @@ public class DefaultMethodsTest extends GenerationTest {
   }
 
   public void testDefaultMethodFunctionalizationWithReflectionsStripped() throws IOException {
-    Options.setStripReflection(true);
+    options.setStripReflection(true);
 
     String source = "interface Foo { void f(); default void g() { f(); } }";
     String header = translateSourceFile(source, "Test", "Test.h");
@@ -87,7 +79,7 @@ public class DefaultMethodsTest extends GenerationTest {
 
     assertTranslation(header, "void A_f(id<A> self)");
     assertTranslation(header, "jint A_g(id<A> self)");
-    assertTranslation(header, "void A_q()");
+    assertTranslation(header, "void A_q(void)");
     assertTranslation(header, "id A_rWithInt_withA_(id<A> self, jint x, id<A> b)");
 
     // This is an illegal value for JVM's access_flags field and should never show up in metadata.
@@ -241,7 +233,7 @@ public class DefaultMethodsTest extends GenerationTest {
     String header = translateSourceFile(source, "Test", "Test.h");
     String impl = getTranslatedFile("Test.m");
 
-    assertTranslation(header, "P_get_f_()");
+    assertTranslation(header, "P_get_f_(void)");
     assertTranslation(header, "P_f_");
     assertTranslation(header, "void P_f(id<P> self)");
     assertTranslation(impl, "id P_f_;");
@@ -400,7 +392,7 @@ public class DefaultMethodsTest extends GenerationTest {
 
   public void testExtraSelectorsFromMultipleOverrides() throws IOException {
     addSourceFile("interface I { int foo(String t); }", "I.java");
-    addSourceFile("class A<T> { int foo(T t) {} }", "A.java");
+    addSourceFile("class A<T> { int foo(T t) { return 0; } }", "A.java");
     String translation = translateSourceFile(
         "class B extends A<String> implements I { public int foo(String t) { return 7; } }",
         "B", "B.h");

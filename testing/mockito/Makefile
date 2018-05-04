@@ -88,6 +88,9 @@ EXTRACTED_JAVA_SOURCES = \
     org/mockito/internal/configuration/injection/filter/TypeBasedCandidateFilter.java \
     org/mockito/internal/configuration/injection/scanner/InjectMocksScanner.java \
     org/mockito/internal/configuration/injection/scanner/MockScanner.java \
+    org/mockito/internal/creation/ClassNameFinder.java \
+    org/mockito/internal/creation/DelegatingMethod.java \
+    org/mockito/internal/creation/MockSettingsImpl.java \
     org/mockito/internal/creation/settings/CreationSettings.java \
     org/mockito/internal/debugging/Localized.java \
     org/mockito/internal/debugging/LocationImpl.java \
@@ -272,9 +275,6 @@ EXTRACTED_JAVA_SOURCES = \
 
 SUPERSOURCE_JAVA_SOURCES = \
     org/mockito/internal/configuration/ClassPathLoader.java \
-    org/mockito/internal/creation/ClassNameFinder.java \
-    org/mockito/internal/creation/DelegatingMethod.java \
-    org/mockito/internal/creation/MockSettingsImpl.java \
     org/mockito/internal/creation/ios/InvocationHandlerAdapter.java \
     org/mockito/internal/creation/ios/IosMockMaker.java \
     org/mockito/internal/creation/jmock/ClassImposterizer.java \
@@ -295,8 +295,7 @@ include $(J2OBJC_ROOT)/make/create_jar.mk
 
 TRANSLATE_JAVA_RELATIVE = $(EXTRACTED_JAVA_SOURCES) $(SUPERSOURCE_JAVA_SOURCES)
 TRANSLATE_JAVA_FULL = $(EXTRACTED_JAVA) $(SUPERSOURCE_JAVA)
-TRANSLATE_ARGS = -sourcepath $(MOCKITO_SOURCEPATH) -classpath $(MOCKITO_CLASSPATH) \
-    --batch-translate-max=300 -J-Xmx2G
+TRANSLATE_ARGS = -sourcepath $(MOCKITO_SOURCEPATH) -classpath $(MOCKITO_CLASSPATH)
 include $(J2OBJC_ROOT)/make/translate.mk
 
 ARCH_HEADERS = $(TRANSLATE_HEADERS:$(GEN_OBJC_DIR)/%=$(ARCH_INCLUDE_DIR)/%)
@@ -354,6 +353,9 @@ objc_sources_manifest: $(OBJC_SOURCES_MANIFEST)
 
 $(BUILD_DIR):
 	@mkdir -p $@
+
+test: dist $(DIST_DIR)/j2objcc
+	$(MAKE) -f tests.mk test
 
 clean:
 	@rm -rf $(BUILD_DIR) $(FAT_LIBS_DIST) $(MOCKITO_LICENSE_DIST)

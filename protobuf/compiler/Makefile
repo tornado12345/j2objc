@@ -24,7 +24,7 @@ SRCS = \
   google/protobuf/compiler/j2objc/j2objc_generator.cc \
   google/protobuf/compiler/j2objc/j2objc_helpers.cc \
   google/protobuf/compiler/j2objc/j2objc_message.cc \
-  google/protobuf/stubs/strutil.cc
+  google/protobuf/compiler/j2objc/j2objc_oneof.cc
 
 OBJS = $(SRCS:%.cc=$(BUILD_DIR)/%.o)
 
@@ -39,8 +39,14 @@ PROTOC_EXE_DIST = $(DIST_DIR)/j2objc_protoc
 PROTOC_PLUGIN = $(BUILD_DIR)/j2objc_protoc_plugin
 PROTOC_PLUGIN_DIST = $(DIST_DIR)/j2objc_protoc_plugin
 
-CXXFLAGS = -x c++ -stdlib=libc++ -Isrc -I../google/src
-LDFLAGS = -l protobuf -l protoc /usr/lib/libc++.dylib
+$(call check_protobuf_dir)
+
+PROTOBUF_LIB = $(PROTOBUF_LIB_PATH)/libprotobuf.a
+PROTOC_LIB = $(PROTOBUF_LIB_PATH)/libprotoc.a
+
+CXXFLAGS = -x c++ -stdlib=libc++ -Isrc -I../google/src -I$(PROTOBUF_INCLUDE_PATH) \
+  -Wno-deprecated-declarations
+LDFLAGS = $(PROTOBUF_LIB) $(PROTOC_LIB) /usr/lib/libc++.dylib
 
 dist: $(PROTOC_EXE_DIST) $(PROTOC_PLUGIN_DIST)
 	@:
@@ -60,11 +66,6 @@ $(BUILD_DIR)/%.o: src/%.cc
 	@mkdir -p $(@D)
 	$(CXX) -MD -c -o $@ $(CXXFLAGS) $<
 
-$(BUILD_DIR)/%.o: ../google/src/%.cc
-	@mkdir -p $(@D)
-	$(CXX) -MD -c -o $@ $(CXXFLAGS) $<
-
-# Create a binary replacement for protoc, which supports --j2objc_out.
 $(PROTOC_EXE): $(OBJS) $(MAIN_OBJ)
 	$(CXX) $(LDFLAGS) -o $@ $^
 

@@ -8,7 +8,7 @@ DIST_DIR = $(J2OBJC_ROOT)/dist
 DIST_INCLUDE_DIR = $(DIST_DIR)/include
 DIST_LIB_DIR = $(DIST_DIR)/lib
 DIST_JAR_DIR = $(DIST_LIB_DIR)
-DIST_LICENSE_DIR = $(DIST_DIR)/license
+DIST_LICENSE_DIR = $(DIST_DIR)/third_party_licenses
 DIST_FRAMEWORK_DIR = $(DIST_DIR)/frameworks
 
 # Release version string used by j2objc and cycle_finder's -version flag.
@@ -42,6 +42,11 @@ ARCH_BUILD_MACOSX_DIR = $(ARCH_BUILD_DIR)/macosx
 ARCH_LIB_MACOSX_DIR = $(ARCH_LIB_DIR)/macosx
 DIST_LIB_MACOSX_DIR = $(DIST_LIB_DIR)/macosx
 
+# Watchos library dirs.
+ARCH_BUILD_WATCH_DIR = $(ARCH_BUILD_DIR)/watchos
+ARCH_LIB_WATCH_DIR = $(ARCH_LIB_DIR)/watchos
+DIST_LIB_WATCH_DIR = $(DIST_LIB_DIR)/watchos
+
 # Appletv library dirs.
 ARCH_BUILD_TV_DIR = $(ARCH_BUILD_DIR)/appletvos
 ARCH_LIB_TV_DIR = $(ARCH_LIB_DIR)/appletvos
@@ -59,7 +64,7 @@ TVOS_AVAILABLE = \
   then echo "YES"; else echo "NO"; fi)
 
 ifndef J2OBJC_ARCHS
-J2OBJC_ARCHS = macosx iphone iphone64 watchv7k simulator simulator64
+J2OBJC_ARCHS = macosx iphone iphone64 watchv7k watchsimulator simulator simulator64
 ifeq ($(TVOS_AVAILABLE), YES)
 J2OBJC_ARCHS += appletvos appletvsimulator
 endif
@@ -107,7 +112,8 @@ endif
 DEBUGFLAGS := $(DEBUGFLAGS) -O$(OPTIMIZATION_LEVEL)
 
 CC_WARNINGS = -Wall -Werror -Wshorten-64-to-32 -Wimplicit-function-declaration \
-  -Wmissing-field-initializers -Wno-unused-variable -Wno-nullability-completeness
+  -Wmissing-field-initializers -Wduplicate-method-match -Wno-unused-variable \
+  -Wno-nullability-completeness
 
 ifdef GCC_PREPROCESSOR_DEFINITIONS
 DEBUGFLAGS += $(GCC_PREPROCESSOR_DEFINITIONS:%=-D%)
@@ -115,13 +121,14 @@ endif
 
 TRANSLATOR_DEPS = $(DIST_DIR)/j2objc $(DIST_JAR_DIR)/j2objc.jar
 
-JAVAC = javac
+# Use Java 8 by default.
+# TODO(tball): remove when Java 9 is supported.
+JAVA_HOME = $(shell /usr/libexec/java_home -v 1.8)
+JAVA = $(JAVA_HOME)/jre/bin/java
 ifdef J2OBJC_JAVAC
 JAVAC = $(J2OBJC_JAVAC)
-endif
-
-ifndef JAVA_HOME
-export JAVA_HOME = $(shell /usr/libexec/java_home)
+else
+JAVAC = $(JAVA_HOME)/bin/javac
 endif
 
 comma=,
@@ -145,6 +152,17 @@ endif
 ifeq ($(findstring test,$(notdir $(MAKECMDGOALS))),test)
 IS_TEST_GOAL = 1
 endif
+
+ifndef PROTOBUF_ROOT_DIR
+ifndef IS_CLEAN_GOAL
+check_protobuf_dir = $(error PROTOBUF_ROOT_DIR not defined)
+endif
+endif
+
+PROTOBUF_LIB_PATH = $(PROTOBUF_ROOT_DIR)/lib
+PROTOBUF_INCLUDE_PATH = $(PROTOBUF_ROOT_DIR)/include
+PROTOBUF_BIN_PATH = $(PROTOBUF_ROOT_DIR)/bin
+PROTOBUF_PROTOC = $(PROTOBUF_BIN_PATH)/protoc
 
 # Avoid bash 'arument list too long' errors.
 # See http://stackoverflow.com/questions/512567/create-a-file-from-a-large-makefile-variable

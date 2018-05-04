@@ -15,8 +15,9 @@
 package com.google.devtools.j2objc;
 
 import com.google.devtools.j2objc.util.SourceVersion;
-
+import java.io.File;
 import java.io.IOException;
+import java.util.List;
 
 /**
  * Tests for {@link Options}.
@@ -26,54 +27,71 @@ import java.io.IOException;
 public class OptionsTest extends GenerationTest {
 
   public void testSourceVersionFlags() throws IOException {
-     // Check that version default is correctly pulled from system properties.
-     String javaVersion = System.getProperty("java.version");
+    if (onJava9OrAbove()) {
+      // TODO(tball): change to 1.9 when Java 9 is supported.
+      assertEquals("1.8", options.getSourceVersion().toString());
+    } else {
+      // Check that version default is correctly pulled from system properties.
+      String javaVersion = System.getProperty("java.specification.version");
 
-     Options.reset();
-     Options.load(new String[] {});
-     assertEquals(javaVersion.substring(0, 3), Options.getSourceVersion().toString());
+      options = new Options();
+      options.load(new String[] {});
+      assertEquals(javaVersion.substring(0, 3), options.getSourceVersion().toString());
 
-     System.setProperty("java.version", "1.8.0_91");
-     Options.reset();
-     Options.load(new String[] {});
-     assertEquals(SourceVersion.JAVA_8, Options.getSourceVersion());
+      System.setProperty("java.specification.version", "1.8");
+      options = new Options();
+      options.load(new String[] {});
+      assertEquals(SourceVersion.JAVA_8, options.getSourceVersion());
 
-     System.setProperty("java.version", "1.6.0");
-     Options.reset();
-     Options.load(new String[] {});
-     assertEquals(SourceVersion.JAVA_6, Options.getSourceVersion());
+      System.setProperty("java.specification.version", "1.6");
+      options = new Options();
+      options.load(new String[] {});
+      assertEquals(SourceVersion.JAVA_6, options.getSourceVersion());
 
-     System.setProperty("java.version", "1.7");
-     Options.reset();
-     Options.load(new String[] {});
-     assertEquals(SourceVersion.JAVA_7, Options.getSourceVersion());
+      System.setProperty("java.specification.version", "1.7");
+      options = new Options();
+      options.load(new String[] {});
+      assertEquals(SourceVersion.JAVA_7, options.getSourceVersion());
 
-     // Reset the java.version property to prevent any unexpected jvm behavior after testing.
-     System.setProperty("java.version", javaVersion);
+      // Reset the java.version property to prevent any unexpected jvm behavior after testing.
+      System.setProperty("java.specification.version", javaVersion);
+    }
 
     String[] argsJavaSource = "-source 1.6".split(" ");
-    Options.load(argsJavaSource);
-    assertEquals(SourceVersion.JAVA_6, Options.getSourceVersion());
+    options.load(argsJavaSource);
+    assertEquals(SourceVersion.JAVA_6, options.getSourceVersion());
 
     argsJavaSource = "-source 1.7".split(" ");
-    Options.load(argsJavaSource);
-    assertEquals(SourceVersion.JAVA_7, Options.getSourceVersion());
+    options.load(argsJavaSource);
+    assertEquals(SourceVersion.JAVA_7, options.getSourceVersion());
 
     argsJavaSource = "-source 1.8".split(" ");
-    Options.load(argsJavaSource);
-    assertEquals(SourceVersion.JAVA_8, Options.getSourceVersion());
+    options.load(argsJavaSource);
+    assertEquals(SourceVersion.JAVA_8, options.getSourceVersion());
   }
 
   public void testSourceVersionFlagAliases() throws IOException {
     // Check that version aliases work correctly.
     String[] argsJavaSource = "-source 8".split(" ");
-    Options.load(argsJavaSource);
-    assertEquals(SourceVersion.JAVA_8, Options.getSourceVersion());
+    options.load(argsJavaSource);
+    assertEquals(SourceVersion.JAVA_8, options.getSourceVersion());
   }
 
   public void testTargetVersionFlags() throws IOException {
     String [] argsJavaTarget = "-target 1.6".split(" ");
     // Passed target should be ignored.
-    Options.load(argsJavaTarget);
+    options.load(argsJavaTarget);
+  }
+
+  public void testFlagsIntermixedWithSources() throws IOException {
+    File tmpDir = new File(getTempDir(), "testdir");
+    tmpDir.mkdir();  // Dir must exist for Options to add it to classpath.
+    String cmdArgs =
+        "Test.java -source 8 OtherTest.java -classpath " + tmpDir.getPath() + " AndAnother.java";
+    String[] args = cmdArgs.split(" ");
+    List<String> sources = options.load(args);
+    assertEquals(3, sources.size());
+    assertEquals(SourceVersion.JAVA_8, options.getSourceVersion());
+    assertTrue(options.fileUtil().getClassPathEntries().contains(tmpDir.getPath()));
   }
 }

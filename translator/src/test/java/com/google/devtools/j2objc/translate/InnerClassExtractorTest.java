@@ -17,7 +17,6 @@
 package com.google.devtools.j2objc.translate;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.Options.MemoryManagementOption;
 import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
@@ -36,7 +35,7 @@ public class InnerClassExtractorTest extends GenerationTest {
   protected void setUp() throws IOException {
     super.setUp();
     // Reference counting by default, change for ARC-specific tests.
-    Options.setMemoryManagementOption(MemoryManagementOption.REFERENCE_COUNTING);
+    options.setMemoryManagementOption(MemoryManagementOption.REFERENCE_COUNTING);
   }
 
   protected List<AbstractTypeDeclaration> translateClassBody(String testSource) {
@@ -64,7 +63,7 @@ public class InnerClassExtractorTest extends GenerationTest {
   }
 
   public void testWeakArcSimpleInnerClass() throws IOException {
-    Options.setMemoryManagementOption(MemoryManagementOption.ARC);
+    options.setMemoryManagementOption(MemoryManagementOption.ARC);
     String source = "import com.google.j2objc.annotations.WeakOuter; "
         + "public class A { Object o;"
         + "  @WeakOuter class B { int test() { return o.hashCode(); } Object o2; }}";
@@ -119,7 +118,7 @@ public class InnerClassExtractorTest extends GenerationTest {
     assertTranslation(translation, "A_B *this$1_;");
     assertTranslation(translation, "jint val$j_;");
     assertTranslatedLines(translation,
-        "void A_B_$1_initWithA_B_withInt_(A_B_$1 *self, A_B *outer$, jint capture$0) {",
+        "void A_B_1_initWithA_B_withInt_(A_B_1 *self, A_B *outer$, jint capture$0) {",
         "  JreStrongAssign(&self->this$1_, outer$);",
         "  self->val$j_ = capture$0;",
         "  A_C_initWithA_(self, outer$->this$0_);",
@@ -253,7 +252,7 @@ public class InnerClassExtractorTest extends GenerationTest {
 
     String translation = translateSourceFile(source, "A", "A.m");
     // Anonymous class constructor in Inner.blah()
-    assertTranslation(translation, "create_A_Inner_$1_initWithA_Inner_(self)");
+    assertTranslation(translation, "create_A_Inner_1_initWithA_Inner_(self)");
     // A.Inner.x referred to in anonymous Foo
     assertTranslation(translation, "this$0_->x_ = 2");
     // A.x referred to in anonymous Foo
@@ -281,7 +280,7 @@ public class InnerClassExtractorTest extends GenerationTest {
 
     String translation = translateSourceFile(source, "A", "A.m");
     // Anonymous class constructor in Inner.blah()
-    assertTranslation(translation, "create_A_Inner_$1_initWithA_Inner_(self)");
+    assertTranslation(translation, "create_A_Inner_1_initWithA_Inner_(self)");
     // A.x referred to in A.Inner.
     assertTranslation(translation, "this$0_->x_ = 2");
     // A.Inner.x referred to in anonymous Foo.
@@ -478,7 +477,7 @@ public class InnerClassExtractorTest extends GenerationTest {
   public void testInnerSubClassOfOtherInnerWithOuterRefsWithGenerics() throws IOException {
     String source = "public class Test { "
         + "class B extends A<B.BInner> { "
-        + "  public class BInner extends A.Inner { BInner() { super(null); } } } "
+        + "  public class BInner extends A<B.BInner>.Inner { BInner() { super(null); } } } "
         + "class A<T extends A<T>.Inner> { "
         + "  private void foo() { } "
         + "  public class Inner { Inner(T t) { foo(); } } } "
@@ -568,7 +567,7 @@ public class InnerClassExtractorTest extends GenerationTest {
     assertNotInTranslation(translation, "this$0_");
     translation = getTranslatedFile("A.m");
     assertNotInTranslation(translation, "this$0_");
-    assertTranslation(translation, "A_fooWithId_(create_A_$1_init())");
+    assertTranslation(translation, "A_fooWithId_(create_A_1_init())");
   }
 
   // Verify that an anonymous class assigned to a static field does not
@@ -583,7 +582,7 @@ public class InnerClassExtractorTest extends GenerationTest {
     translation = getTranslatedFile("A.m");
     assertFalse(translation.contains("this$0_"));
     assertTranslation(translation,
-        "JreStrongAssignAndConsume(&A_test, new_A_$1_init());");
+        "JreStrongAssignAndConsume(&A_test, new_A_1_init());");
   }
 
   // Verify that an anonymous class in a static method does not reference
@@ -602,7 +601,7 @@ public class InnerClassExtractorTest extends GenerationTest {
         "- (instancetype)initWithJavaUtilCollection:(id<JavaUtilCollection>)capture$0;");
     assertTranslation(translation, "[((id<JavaUtilCollection>) nil_chk(capture$0)) iterator]");
     assertTranslation(translation,
-        "return create_A_$1_initWithJavaUtilCollection_(c);");
+        "return create_A_1_initWithJavaUtilCollection_(c);");
     assertTranslation(translation,
         "- (instancetype)initWithJavaUtilCollection:(id<JavaUtilCollection>)capture$0 {");
   }
@@ -729,7 +728,7 @@ public class InnerClassExtractorTest extends GenerationTest {
         "class Test { Runnable foo() { class MyRunnable implements Runnable { "
         + "public void run() { Runnable r = new Runnable() { public void run() {} }; } } "
         + "return new MyRunnable(); } }", "Test", "Test.m");
-    assertOccurrences(translation, "@interface Test_1MyRunnable_$1", 1);
+    assertOccurrences(translation, "@interface Test_1MyRunnable_1", 1);
   }
 
   public void testOuterInitializedBeforeSuperInit() throws IOException {

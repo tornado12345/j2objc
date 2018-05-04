@@ -15,53 +15,111 @@ package com.google.devtools.j2objc.util;
 
 import com.google.common.io.CharStreams;
 import com.google.devtools.j2objc.J2ObjC;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.PackageDeclaration;
 import com.google.devtools.j2objc.file.InputFile;
 import com.google.devtools.j2objc.file.JarredInputFile;
 import com.google.devtools.j2objc.file.RegularInputFile;
-
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
-
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import javax.annotation.Nullable;
+import javax.tools.JavaFileObject;
 
 /**
  * Utilities for reading {@link com.google.devtools.j2objc.file.InputFile}s.
  *
- * @author Tom Ball, Keith Stanger, Mike Thvedt
+ * @author Tom Ball, Keith Stanger, Mike Thvedt, Tim Gao
  */
 public class FileUtil {
 
+  private Set<String> tempDirs = new HashSet<>();
+  private List<String> sourcePathEntries = new ArrayList<>();
+  private List<String> classPathEntries = new ArrayList<>();
+  private File outputDirectory = new File(".");
+  private String fileEncoding = System.getProperty("file.encoding", "UTF-8");
+  private Charset charset = Charset.forName(fileEncoding);
+
+  public void setSourcePathEntries(List<String> sourcePathEntries) {
+    this.sourcePathEntries = sourcePathEntries;
+  }
+
+  public List<String> getSourcePathEntries() {
+    return sourcePathEntries;
+  }
+
+  public void appendSourcePath(String entry) {
+    sourcePathEntries.add(entry);
+  }
+
+  public void insertSourcePath(int index, String entry) {
+    sourcePathEntries.add(index, entry);
+  }
+
+  public List<String> getClassPathEntries() {
+    return classPathEntries;
+  }
+
+  public void setOutputDirectory(File outputDirectory) {
+    this.outputDirectory = outputDirectory;
+  }
+
+  public File getOutputDirectory() {
+    if (!outputDirectory.exists()) {
+      outputDirectory.mkdirs();
+    }
+    return outputDirectory;
+  }
+
+  public void setFileEncoding(String fileEncoding) {
+    this.fileEncoding = fileEncoding;
+    charset = Charset.forName(fileEncoding);
+  }
+
+  public String getFileEncoding() {
+    return fileEncoding;
+  }
+
+  public Charset getCharset() {
+    return charset;
+  }
+
+  public void addTempDir(String tempDir) {
+    tempDirs.add(tempDir);
+  }
+
+  public Set<String> getTempDirs() {
+    return tempDirs;
+  }
+
   public static String getMainTypeName(InputFile file) {
     String basename = file.getBasename();
+    return removeFileSuffix(basename);
+  }
+
+  public static String getMainTypeName(JavaFileObject file) {
+    String path = file.getName();
+    String basename = path.substring(path.lastIndexOf('/') + 1);
+    return removeFileSuffix(basename);
+  }
+
+  private static String removeFileSuffix(String basename) {
     int end = basename.lastIndexOf(".java");
     if (end == -1) {
       end = basename.lastIndexOf(".class");
     }
-    if (end != -1) {
-      basename = basename.substring(0, end);
-    }
-    return basename;
-  }
-
-  // TODO(tball): remove when Parser extraction is complete.
-  public static String getQualifiedMainTypeName(InputFile file,
-      org.eclipse.jdt.core.dom.CompilationUnit unit) {
-    String qualifiedName = getMainTypeName(file);
-    org.eclipse.jdt.core.dom.PackageDeclaration packageDecl = unit.getPackage();
-    if (packageDecl != null) {
-      String packageName = packageDecl.getName().getFullyQualifiedName();
-      qualifiedName = packageName + "." + qualifiedName;
-    }
-    return qualifiedName;
+    return end != -1 ? basename.substring(0, end) : basename;
   }
 
   public static String getQualifiedMainTypeName(InputFile file, CompilationUnit unit) {
@@ -80,8 +138,8 @@ public class FileUtil {
    * Returns a file guaranteed to exist, or null.
    */
   @Nullable
-  public static InputFile findOnSourcePath(String qualifiedName) throws IOException {
-    return findOnPaths(qualifiedName, Options.getSourcePathEntries(), ".java");
+  public InputFile findOnSourcePath(String qualifiedName) throws IOException {
+    return findOnPaths(qualifiedName, sourcePathEntries, ".java");
   }
 
   /**
@@ -90,8 +148,8 @@ public class FileUtil {
    * Returns a file guaranteed to exist, or null.
    */
   @Nullable
-  public static InputFile findOnClassPath(String qualifiedName) throws IOException {
-    return findOnPaths(qualifiedName, Options.getClassPathEntries(), ".class");
+  public InputFile findOnClassPath(String qualifiedName) throws IOException {
+    return findOnPaths(qualifiedName, classPathEntries, ".class");
   }
 
   private static InputFile findOnPaths(
@@ -118,8 +176,8 @@ public class FileUtil {
     return null;
   }
 
-  public static String readFile(InputFile file) throws IOException {
-    return CharStreams.toString(file.openReader());
+  public String readFile(InputFile file) throws IOException {
+    return CharStreams.toString(file.openReader(charset));
   }
 
   private static InputStream streamForFile(String filename) throws IOException {
@@ -179,5 +237,49 @@ public class FileUtil {
     }
   }
 
-  private FileUtil() {}
+  /**
+   * Extract a ZipEntry to the specified directory.
+   */
+  public File extractZipEntry(File dir, ZipFile zipFile, ZipEntry entry) throws IOException {
+    File outputFile = new File(dir, entry.getName());
+    File parentFile = outputFile.getParentFile();
+    if (!parentFile.isDirectory() && !parentFile.mkdirs()) {
+      throw new IOException("Could not extract file to " + dir.getPath());
+    }
+    try (InputStream inputStream = zipFile.getInputStream(entry);
+        FileOutputStream outputStream = new FileOutputStream(outputFile)) {
+      byte[] buf = new byte[1024];
+      int n;
+      while ((n = inputStream.read(buf)) > 0) {
+        outputStream.write(buf, 0, n);
+      }
+    }
+    return outputFile;
+  }
+
+  /**
+   * Android libraries are packaged in AAR files, which is a zip file with a ".aar"
+   * suffix that contains a classes.jar with the classfiles, as well as any Android
+   * resources associated with this library. This method extracts the classes.jar
+   * entry from the AAR file, so it can be used as a classpath entry.
+   * <p>
+   * If there is an error extracting the classes.jar entry, a warning is logged
+   * and the original path is returned.
+   */
+  public File extractClassesJarFromAarFile(File aarFile) {
+    try (ZipFile zfile = new ZipFile(aarFile)) {
+      File tempDir = FileUtil.createTempDir(aarFile.getName());
+      ZipEntry entry = zfile.getEntry("classes.jar");
+      if (entry == null) {
+        ErrorUtil.warning(aarFile.getPath() + " does not have a classes.jar entry");
+        return aarFile;
+      }
+      File tmpFile = extractZipEntry(tempDir, zfile, entry);
+      tmpFile.deleteOnExit();
+      return tmpFile;
+    } catch (IOException e) {
+      ErrorUtil.warning("unable to access " + aarFile.getPath() + ": " + e);
+      return aarFile;
+    }
+  }
 }

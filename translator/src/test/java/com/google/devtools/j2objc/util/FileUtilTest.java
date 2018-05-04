@@ -16,9 +16,9 @@ package com.google.devtools.j2objc.util;
 
 import com.google.devtools.j2objc.GenerationTest;
 import com.google.devtools.j2objc.file.JarredInputFile;
-
 import java.io.File;
 import java.io.IOException;
+import java.util.zip.ZipFile;
 
 /**
  * Unit tests for {@link FileUtil}.
@@ -34,7 +34,7 @@ public class FileUtilTest extends GenerationTest {
     File file = new File(getResourceAsFile("example.jar"));
     JarredInputFile jarEntry = new JarredInputFile(
         file.getPath(), "com/google/test/package-info.java");
-    String source = FileUtil.readFile(jarEntry);
+    String source = options.fileUtil().readFile(jarEntry);
     assertTrue(source.contains("package com.google.test;"));
   }
 
@@ -44,5 +44,15 @@ public class FileUtilTest extends GenerationTest {
     JarredInputFile jarEntry = new JarredInputFile(
         file.getPath(), "com/google/test/package-info.java");
     assertTrue(jarEntry.exists());
+  }
+  
+  // Verify that a classes.jar file is extracted from an Android AAR file.
+  public void testExtractClassesJarFromAarFile() throws IOException {
+    File aarFile = new File(getResourceAsFile("hello.aar"));
+    File classesJar = options.fileUtil().extractClassesJarFromAarFile(aarFile);
+    assertTrue(classesJar.exists());
+    try (ZipFile zfile = new ZipFile(classesJar)) {
+      assertNotNull(zfile.getEntry("com/example/hello/Hello.class"));
+    }
   }
 }

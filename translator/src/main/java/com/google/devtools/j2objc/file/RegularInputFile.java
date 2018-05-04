@@ -13,14 +13,13 @@
  */
 package com.google.devtools.j2objc.file;
 
-import com.google.devtools.j2objc.Options;
-
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.nio.charset.Charset;
 
 /**
  * A single file in the filesystem.
@@ -28,38 +27,41 @@ import java.io.Reader;
  * @author Mike Thvedt
  */
 public class RegularInputFile implements InputFile {
-  private final String path, unitPath;
+  private final String absolutePath;
+  private final String unitPath;
 
   public RegularInputFile(String unitPath) {
     this(unitPath, unitPath);
   }
 
   public RegularInputFile(String fsPath, String unitPath) {
-    this.path = fsPath;
+    this.absolutePath = fsPath;
     this.unitPath = unitPath;
   }
 
   @Override
   public boolean exists() {
-    return new File(path).exists();
+    return new File(absolutePath).exists();
   }
 
   @Override
   public InputStream getInputStream() throws IOException {
-    return new FileInputStream(new File(path));
+    return new FileInputStream(new File(absolutePath));
   }
 
   @Override
-  public Reader openReader() throws IOException {
-    return new InputStreamReader(getInputStream(),  Options.getCharset());
+  public Reader openReader(Charset charset) throws IOException {
+    return new InputStreamReader(getInputStream(),  charset);
   }
 
-  public String getPath() {
-    return path;
+  @Override
+  public String getAbsolutePath() {
+    return absolutePath;
   }
 
-  public String getContainingPath() {
-    return unitPath;
+  @Override
+  public String getOriginalLocation() {
+    return absolutePath;
   }
 
   @Override
@@ -74,11 +76,11 @@ public class RegularInputFile implements InputFile {
 
   @Override
   public long lastModified() {
-    return new File(path).lastModified();
+    return new File(absolutePath).lastModified();
   }
 
   @Override
   public String toString() {
-    return getPath();
+    return getOriginalLocation();
   }
 }

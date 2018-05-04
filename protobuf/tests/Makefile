@@ -14,7 +14,9 @@ JAVA_TESTS = \
   ByteStringTest.java \
   CompatibilityTest.java \
   EnumsTest.java \
+  MapsTest.java \
   MessagesTest.java \
+  OneofTest.java \
   PrimitivesTest.java \
   StringsTest.java
 OTHER_JAVA_SOURCES = \
@@ -31,7 +33,9 @@ PROTOS = \
   empty_file.proto \
   enum_fields.proto \
   funny_names.proto \
+  map_fields.proto \
   message_fields.proto \
+  oneof_fields.proto \
   package_prefix.proto \
   prefix_option.proto \
   primitives.proto \
@@ -40,10 +44,14 @@ PROTOS = \
   string_fields.proto \
   typical.proto
 
-PROTO_INCLUDE_DIR = /usr/local/include
+TESTDATA = \
+  testdata/largeproto \
+  testdata/randombytes
+
+$(call check_protobuf_dir)
+
 DESCRIPTOR_INCLUDE_DIR = ../compiler/src
 DESCRIPTOR_PROTO = $(DESCRIPTOR_INCLUDE_DIR)/google/protobuf/j2objc-descriptor.proto
-
 
 TESTS_TO_RUN = $(JAVA_TESTS:%.java=%)
 TESTS_TO_RUN_ARC = $(JAVA_TESTS_ARC:%.java=%)
@@ -70,13 +78,14 @@ LIB_DEPS = $(DIST_LIB_MACOSX_DIR)/libjunit.a $(DIST_LIB_MACOSX_DIR)/libprotobuf_
 
 J2OBJC_PROTOS_NAME = testprotos
 J2OBJC_PROTOS_INPUTS = $(PROTOS:%=protos/%) $(DESCRIPTOR_PROTO)
-J2OBJC_PROTOS_PATHS = protos $(DESCRIPTOR_INCLUDE_DIR) $(PROTO_INCLUDE_DIR)
+J2OBJC_PROTOS_PATHS = protos $(DESCRIPTOR_INCLUDE_DIR) $(PROTOBUF_INCLUDE_PATH)
 J2OBJC_PROTOS_PREFIX_FILES = j2objc_prefixes
 J2OBJC_PROTOS_GENERATE_CLASS_MAPPINGS = YES
 include $(J2OBJC_ROOT)/make/j2objc_protos.mk
 
 CREATE_JAR_NAME = protobuf_tests
 CREATE_JAR_SOURCES = $(JAVA_SOURCES) $(J2OBJC_PROTOS_JAVA)
+CREATE_JAR_RESOURCES = $(TESTDATA)
 CREATE_JAR_JAVAC_ARGS = -cp $(CLASSPATH) -encoding UTF-8
 CREATE_JAR_DEPENDENCIES = annotations_dist junit_java protobuf_runtime_java
 include $(J2OBJC_ROOT)/make/create_jar.mk

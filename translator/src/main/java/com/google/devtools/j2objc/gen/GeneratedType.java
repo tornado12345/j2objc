@@ -24,10 +24,11 @@ import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.types.HeaderImportCollector;
 import com.google.devtools.j2objc.types.ImplementationImportCollector;
 import com.google.devtools.j2objc.types.Import;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.NameTable;
 import java.util.List;
 import java.util.Set;
-import org.eclipse.jdt.core.dom.ITypeBinding;
+import javax.lang.model.element.TypeElement;
 
 /**
  * Contains the generated source code and additional context for a single Java
@@ -72,16 +73,17 @@ public class GeneratedType {
   }
 
   public static GeneratedType fromTypeDeclaration(AbstractTypeDeclaration typeNode) {
-    ITypeBinding typeBinding = typeNode.getTypeBinding();
+    TypeElement typeElement = typeNode.getTypeElement();
     CompilationUnit unit = TreeUtil.getCompilationUnit(typeNode);
     NameTable nameTable = unit.getEnv().nameTable();
+    boolean emitLineDirectives = unit.getEnv().options().emitLineDirectives();
 
     ImmutableList.Builder<String> superTypes = ImmutableList.builder();
-    ITypeBinding superclass = typeBinding.getSuperclass();
+    TypeElement superclass = ElementUtil.getSuperclass(typeElement);
     if (superclass != null) {
       superTypes.add(nameTable.getFullName(superclass));
     }
-    for (ITypeBinding superInterface : typeBinding.getInterfaces()) {
+    for (TypeElement superInterface : ElementUtil.getInterfaces(typeElement)) {
       superTypes.add(nameTable.getFullName(superInterface));
     }
 
@@ -96,24 +98,37 @@ public class GeneratedType {
     ImplementationImportCollector importCollector = new ImplementationImportCollector(unit);
     typeNode.accept(importCollector);
 
-    SourceBuilder builder = new SourceBuilder(Options.emitLineDirectives());
+    SourceBuilder builder = new SourceBuilder(emitLineDirectives);
     TypeDeclarationGenerator.generate(builder, typeNode);
     String publicDeclarationCode = builder.toString();
 
-    builder = new SourceBuilder(Options.emitLineDirectives());
+    builder = new SourceBuilder(emitLineDirectives);
     TypePrivateDeclarationGenerator.generate(builder, typeNode);
-    String privateDeclarationCode = builder.toString();
 
-    builder = new SourceBuilder(Options.emitLineDirectives());
-    TypeImplementationGenerator.generate(builder, typeNode);
-    String implementationCode = builder.toString();
+    String privateDeclarationCode;
+    String implementationCode;
+    Options options = unit.getEnv().options();
+    if (unit.getEnv().translationUtil().generateImplementation(typeElement)) {
+      builder = new SourceBuilder(options.emitLineDirectives());
+      TypePrivateDeclarationGenerator.generate(builder, typeNode);
+      privateDeclarationCode = builder.toString();
+
+      builder = new SourceBuilder(options.emitLineDirectives());
+      TypeImplementationGenerator.generate(builder, typeNode);
+      implementationCode = builder.toString();
+    } else {
+      privateDeclarationCode = "";
+      implementationCode = String.format(
+          "// Implementation not generated because %s is on the bootclasspath.\n", 
+          ElementUtil.getQualifiedName(typeElement));
+    }
 
     ImmutableSet.Builder<Import> implementationIncludes = ImmutableSet.builder();
     implementationIncludes.addAll(privateDeclarationCollector.getSuperTypes());
     implementationIncludes.addAll(importCollector.getImports());
 
     return new GeneratedType(
-        nameTable.getFullName(typeBinding),
+        nameTable.getFullName(typeElement),
         typeNode.hasPrivateDeclaration(),
         superTypes.build(),
         ImmutableSet.copyOf(headerCollector.getForwardDeclarations()),

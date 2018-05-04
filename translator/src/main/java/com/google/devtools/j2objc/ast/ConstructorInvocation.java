@@ -14,11 +14,11 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.ExecutablePair;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
-import org.eclipse.jdt.core.dom.IMethodBinding;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Node for a alternate constructor invocation. (i.e. "this(...);")
@@ -26,29 +26,21 @@ import org.eclipse.jdt.core.dom.IMethodBinding;
 public class ConstructorInvocation extends Statement {
 
   private ExecutablePair method = ExecutablePair.NULL;
-  private ChildList<Expression> arguments = ChildList.create(Expression.class, this);
+  private TypeMirror varargsType = null;
+  private final ChildList<Expression> arguments = ChildList.create(Expression.class, this);
 
   public ConstructorInvocation() {}
 
   public ConstructorInvocation(ConstructorInvocation other) {
     super(other);
     method = other.getExecutablePair();
+    varargsType = other.getVarargsType();
     arguments.copyFrom(other.getArguments());
   }
 
   @Override
   public Kind getKind() {
     return Kind.CONSTRUCTOR_INVOCATION;
-  }
-
-  public IMethodBinding getMethodBinding() {
-    return (IMethodBinding) BindingConverter.unwrapTypeMirrorIntoBinding(method.type());
-  }
-
-  public void setMethodBinding(IMethodBinding methodBinding) {
-    method = new ExecutablePair(
-        BindingConverter.getExecutableElement(methodBinding),
-        BindingConverter.getType(methodBinding));
   }
 
   public ExecutablePair getExecutablePair() {
@@ -64,8 +56,26 @@ public class ConstructorInvocation extends Statement {
     return method.element();
   }
 
+  public ExecutableType getExecutableType() {
+    return method.type();
+  }
+
+  public TypeMirror getVarargsType() {
+    return varargsType;
+  }
+
+  public ConstructorInvocation setVarargsType(TypeMirror type) {
+    varargsType = type;
+    return this;
+  }
+
   public List<Expression> getArguments() {
     return arguments;
+  }
+  
+  public ConstructorInvocation setArguments(List<Expression> args) {
+    arguments.replaceAll(args);
+    return this;
   }
 
   public ConstructorInvocation addArgument(Expression arg) {

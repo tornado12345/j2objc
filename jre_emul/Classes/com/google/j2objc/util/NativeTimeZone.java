@@ -69,23 +69,20 @@ public final class NativeTimeZone extends TimeZone {
 
 
   public static native NativeTimeZone get(String name) /*-[
-    NSTimeZone *timeZone = [NSTimeZone timeZoneWithName:name];
-    if (timeZone == nil) {
-      return nil;
-    }
-    return [ComGoogleJ2objcUtilNativeTimeZone getWithNativeTimeZoneWithId:timeZone];
+    return ComGoogleJ2objcUtilNativeTimeZone_fromNativeTimeZoneWithId_(
+        [NSTimeZone timeZoneWithName:name]);
   ]-*/;
 
   public static native NativeTimeZone getDefaultNativeTimeZone() /*-[
-    NSTimeZone *timeZone = [NSTimeZone defaultTimeZone];
-    if (timeZone == nil) {  // Unlikely, but just to be defensive.
-      return nil;
-    }
-    return [ComGoogleJ2objcUtilNativeTimeZone getWithNativeTimeZoneWithId:timeZone];
+    return ComGoogleJ2objcUtilNativeTimeZone_fromNativeTimeZoneWithId_(
+        [NSTimeZone defaultTimeZone]);
   ]-*/;
 
-  public static native NativeTimeZone getWithNativeTimeZone(Object nativeTimeZone) /*-[
+  private static native NativeTimeZone fromNativeTimeZone(Object nativeTimeZone) /*-[
     NSTimeZone *tz = (NSTimeZone *)nativeTimeZone;
+    if (!tz) {
+      return nil;
+    }
     NSDate *now = [NSDate date];
     NSInteger offset = [tz secondsFromGMTForDate:now];
     NSTimeInterval dstOffset = [tz daylightSavingTimeOffsetForDate:now];
@@ -177,6 +174,20 @@ public final class NativeTimeZone extends TimeZone {
     double interval = (double)time / 1000.0;
     NSDate *date = [NSDate dateWithTimeIntervalSince1970:interval];
     return (jint)[(NSTimeZone *)nativeTimeZone_ secondsFromGMTForDate:date] * 1000;
+  ]-*/;
+
+  /**
+   * Used by java.util.GregorianCalendar.
+   */
+  public native int getOffsetsByUtcTime(long utcTimeInMillis, int[] offsets) /*-[
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:(double)utcTimeInMillis / 1000.0];
+    NSTimeZone *tz = (NSTimeZone *)nativeTimeZone_;
+    jint totalOffset = (jint)[tz secondsFromGMTForDate:date] * 1000;
+    jint dstOffset = (jint)[tz daylightSavingTimeOffsetForDate:date] * 1000;
+    jint rawOffset = totalOffset - dstOffset;
+    *IOSIntArray_GetRef(offsets, 0) = rawOffset;
+    *IOSIntArray_GetRef(offsets, 1) = dstOffset;
+    return totalOffset;
   ]-*/;
 
   /**

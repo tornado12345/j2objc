@@ -15,7 +15,6 @@
 package com.google.devtools.j2objc.gen;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 
 import java.io.IOException;
 
@@ -30,27 +29,19 @@ public class TypeImplementationGeneratorTest extends GenerationTest {
     String translation = translateSourceFile(
         "import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) "
         + "@interface A { @Deprecated int I = 5; }", "A", "A.m");
-    assertTranslatedLines(translation,
-        "IOSObjectArray *A__Annotations$0() {",
-        "  return [IOSObjectArray arrayWithObjects:(id[]){ "
-          + "create_JavaLangDeprecated() } count:1 "
-          + "type:JavaLangAnnotationAnnotation_class_()];",
-        "}");
+    assertTranslation(translation, "IOSObjectArray *A__Annotations$0()");
+    assertTranslation(translation, "create_JavaLangDeprecated");
   }
 
   public void testFieldAnnotationMethodForInterfaceType() throws IOException {
     String translation = translateSourceFile(
         "interface I { @Deprecated int I = 5; }", "I", "I.m");
-    assertTranslatedLines(translation,
-        "IOSObjectArray *I__Annotations$0() {",
-        "  return [IOSObjectArray arrayWithObjects:(id[]){ "
-          + "create_JavaLangDeprecated() } count:1 "
-          + "type:JavaLangAnnotationAnnotation_class_()];",
-        "}");
+    assertTranslation(translation, "IOSObjectArray *I__Annotations$0()");
+    assertTranslation(translation, "create_JavaLangDeprecated");
   }
 
   public void testFunctionLineNumbers() throws IOException {
-    Options.setEmitLineDirectives(true);
+    options.setEmitLineDirectives(true);
     String translation = translateSourceFile("class A {\n\n"
         + "  static void test() {\n"
         + "    System.out.println(A.class);\n"
@@ -88,7 +79,7 @@ public class TypeImplementationGeneratorTest extends GenerationTest {
 
   // Verify that accessor methods for static vars and constants are generated on request.
   public void testStaticFieldAccessorMethods() throws IOException {
-    Options.setStaticAccessorMethods(true);
+    options.setStaticAccessorMethods(true);
     String source = "class Test { "
         + "static String ID; "
         + "private static int i; "
@@ -122,7 +113,7 @@ public class TypeImplementationGeneratorTest extends GenerationTest {
 
   // Verify that accessor methods for enum constants are generated on request.
   public void testEnumConstantAccessorMethods() throws IOException {
-    Options.setStaticAccessorMethods(true);
+    options.setStaticAccessorMethods(true);
     String source = "enum Test { ONE, TWO, EOF }";
     String translation = translateSourceFile(source, "Test", "Test.m");
     assertTranslatedLines(translation, "+ (Test *)ONE {", "return JreEnum(Test, ONE);");

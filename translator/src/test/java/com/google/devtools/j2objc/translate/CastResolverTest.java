@@ -38,10 +38,10 @@ public class CastResolverTest extends GenerationTest {
     String translation = translateSourceFile(
         "public class Test { void test() { "
         + "  String a = \"abc\"; "
-        + "  String b = \"foo\" + a.hashCode() + \"bar\" + a.length() + \"baz\"; } }",
+        + "  String b = \"foo\" + a.hashCode() + \"bar\" + a.hashCode() + \"baz\"; } }",
         "Test", "Test.m");
     assertTranslation(translation,
-        "JreStrcat(\"$I$I$\", @\"foo\", ((jint) [a hash]), @\"bar\", ((jint) [a length]),"
+        "JreStrcat(\"$I$I$\", @\"foo\", ((jint) [a hash]), @\"bar\", ((jint) [a hash]),"
           + " @\"baz\")");
   }
 
@@ -50,7 +50,7 @@ public class CastResolverTest extends GenerationTest {
     List<Statement> stmts = translateStatements(source);
     assertEquals(1, stmts.size());
     String result = generateStatement(stmts.get(0));
-    assertEquals("jint i = ((jint) [create_NSException_init() hash]);", result);
+    assertEquals("jint i = ((jint) [create_JavaLangThrowable_init() hash]);", result);
   }
 
   // b/5872710: generic return type needs to be cast if chaining invocations.
@@ -58,13 +58,13 @@ public class CastResolverTest extends GenerationTest {
     String translation = translateSourceFile(
       "import java.util.ArrayList; public class Test {"
       + "  int length; static ArrayList<String> strings = new ArrayList<String>();"
-      + "  public static void main(String[] args) { int n = strings.get(1).length(); }}",
+      + "  public static void main(String[] args) { int n = strings.get(1).hashCode(); }}",
       "Test", "Test.m");
     assertTranslation(translation, "((jint) [((NSString *) "
-      + "nil_chk([((JavaUtilArrayList *) nil_chk(Test_strings)) getWithInt:1])) length]);");
+      + "nil_chk([((JavaUtilArrayList *) nil_chk(Test_strings)) getWithInt:1])) hash]);");
   }
 
-  // Verify that String.length() and Object.hashCode() return values are cast when used.
+  // Verify that Object.hashCode() return value is cast when used.
   public void testStringLengthCompare() throws IOException {
     String translation = translateSourceFile(
         "public class Test { boolean test(String s) { return -2 < \"1\".length(); }"
@@ -72,7 +72,7 @@ public class CastResolverTest extends GenerationTest {
         + "  int test3() { return super.hashCode(); } }",
         "Test", "Test.m");
     // Verify referenced return value is cast.
-    assertTranslation(translation, "return -2 < ((jint) [@\"1\" length]);");
+    assertTranslation(translation, "return -2 < [@\"1\" java_length];");
     // Verify unused return value isn't.
     assertTranslation(translation, "[nil_chk(o) hash];");
     // Verify that super call to hashCode() is cast.
@@ -250,5 +250,21 @@ public class CastResolverTest extends GenerationTest {
         + " if (a1 == null || a2 == null) return null; return b ? a1.foo : a2.foo; } }",
         "Test", "Test.m");
     assertTranslation(translation, "return b ? ((Test *) a1->foo_) : ((Test *) a2->foo_);");
+  }
+
+  public void testCastLocallyParameterizedType() throws IOException {
+    addSourceFile("interface Foo<A> { A foo(); }", "Foo.java");
+    addSourceFile("interface Bar<B extends Number> extends Foo<B> {}", "Bar.java");
+    String translation = translateSourceFile(
+        "class Test { Integer test(Bar<Integer> bar) { return bar.foo(); } }", "Test", "Test.m");
+    // Needs the JavaLangInteger cast.
+    assertTranslation(translation, "return ((JavaLangInteger *) [((id<Bar>) nil_chk(bar)) foo]);");
+  }
+
+  public void testCastInSuperFieldAccess() throws IOException {
+    addSourceFile("class A <T> { T foo; }", "A.java");
+    String translation = translateSourceFile("class Test extends A<String> {"
+        + " int fooLength() { return super.foo.length(); } }", "Test", "Test.m");
+    assertTranslation(translation, "(NSString *) nil_chk(foo_)");
   }
 }

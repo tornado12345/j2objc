@@ -17,10 +17,8 @@
 package com.google.devtools.j2objc.gen;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.Options.MemoryManagementOption;
 import com.google.devtools.j2objc.ast.Statement;
-
 import java.io.IOException;
 import java.util.List;
 
@@ -89,7 +87,7 @@ public class StatementGeneratorTest extends GenerationTest {
     List<Statement> stmts = translateStatements(source);
     assertEquals(2, stmts.size());
     String result = generateStatement(stmts.get(1));
-    assertEquals("create_JavaLangException_initWithNSException_(cause);", result);
+    assertEquals("create_JavaLangException_initWithJavaLangThrowable_(cause);", result);
   }
 
   public void testCastTranslation() throws IOException {
@@ -97,8 +95,8 @@ public class StatementGeneratorTest extends GenerationTest {
     List<Statement> stmts = translateStatements(source);
     assertEquals(3, stmts.size());
     String result = generateStatement(stmts.get(1));
-    assertEquals("NSException *t = "
-        + "(NSException *) cast_chk(o, [NSException class]);", result);
+    assertEquals("JavaLangThrowable *t = "
+        + "(JavaLangThrowable *) cast_chk(o, [JavaLangThrowable class]);", result);
     result = generateStatement(stmts.get(2));
     assertEquals("IOSIntArray *i = "
         + "(IOSIntArray *) cast_chk(o, [IOSIntArray class]);", result);
@@ -119,7 +117,7 @@ public class StatementGeneratorTest extends GenerationTest {
     List<Statement> stmts = translateStatements(source);
     assertEquals(1, stmts.size());
     String result = generateStatement(stmts.get(0));
-    assertEquals("@try {\n;\n}\n @catch (JavaLangException *e) {\n}", result);
+    assertEquals("@try {\n;\n}\n@catch (JavaLangException *e) {\n}", result);
   }
 
   public void testInstanceOfTranslation() throws IOException {
@@ -127,7 +125,7 @@ public class StatementGeneratorTest extends GenerationTest {
     List<Statement> stmts = translateStatements(source);
     assertEquals(2, stmts.size());
     String result = generateStatement(stmts.get(1));
-    assertEquals("if ([e isKindOfClass:[NSException class]]) {\n}", result);
+    assertEquals("if ([e isKindOfClass:[JavaLangThrowable class]]) {\n}", result);
   }
 
   public void testFullyQualifiedTypeTranslation() throws IOException {
@@ -200,14 +198,6 @@ public class StatementGeneratorTest extends GenerationTest {
     translation = getTranslatedFile("Example.h");
     assertTranslation(translation, "FOUNDATION_EXPORT NSString *Example_Bar_FOO;");
     assertTranslation(translation, "J2OBJC_STATIC_FIELD_OBJ_FINAL(Example_Bar, FOO, NSString *)");
-  }
-
-  public void testMultipleVariableDeclarations() throws IOException {
-    String source = "String one, two;";
-    List<Statement> stmts = translateStatements(source);
-    assertEquals(1, stmts.size());
-    String result = generateStatement(stmts.get(0));
-    assertEquals("NSString *one, *two;", result);
   }
 
   public void testObjectDeclaration() throws IOException {
@@ -426,11 +416,11 @@ public class StatementGeneratorTest extends GenerationTest {
         + "  public T nextElement() { return it.next(); }}; }}",
         "Test", "Test.m");
     assertTranslation(translation,
-        "return create_Test_$1_initWithJavaUtilCollection_(collection);");
+        "return create_Test_1_initWithJavaUtilCollection_(collection);");
     assertTranslation(translation,
         "- (instancetype)initWithJavaUtilCollection:(id<JavaUtilCollection>)capture$0;");
     assertTranslation(translation,
-        "__attribute__((unused)) static Test_$1 *new_Test_$1_initWithJavaUtilCollection_("
+        "__attribute__((unused)) static Test_1 *new_Test_1_initWithJavaUtilCollection_("
         + "id<JavaUtilCollection> capture$0) NS_RETURNS_RETAINED;");
   }
 
@@ -739,9 +729,9 @@ public class StatementGeneratorTest extends GenerationTest {
     List<Statement> stmts = translateStatements(source);
     assertEquals(2, stmts.size());
     String result = generateStatement(stmts.get(0)).trim();
-    assertEquals(result, "jfloat f = JavaLangFloat_NaN;");
+    assertEquals("jfloat f = JavaLangFloat_NaN;", result);
     result = generateStatement(stmts.get(1)).trim();
-    assertEquals(result, "jdouble d = JavaLangDouble_POSITIVE_INFINITY;");
+    assertEquals("jdouble d = JavaLangDouble_POSITIVE_INFINITY;", result);
   }
 
   public void testInstanceStaticConstants() throws IOException {
@@ -1117,7 +1107,7 @@ public class StatementGeneratorTest extends GenerationTest {
   }
 
   public void testARCAutoreleasePoolForStatement() throws IOException {
-    Options.setMemoryManagementOption(MemoryManagementOption.ARC);
+    options.setMemoryManagementOption(MemoryManagementOption.ARC);
     String translation = translateSourceFile(
         "import com.google.j2objc.annotations.AutoreleasePool;"
         + "public class Test {"
@@ -1134,7 +1124,7 @@ public class StatementGeneratorTest extends GenerationTest {
   }
 
   public void testARCAutoreleasePoolEnhancedForStatement() throws IOException {
-    Options.setMemoryManagementOption(MemoryManagementOption.ARC);
+    options.setMemoryManagementOption(MemoryManagementOption.ARC);
     String translation = translateSourceFile(
         "import com.google.j2objc.annotations.AutoreleasePool;"
         + "public class Test {"
@@ -1168,7 +1158,7 @@ public class StatementGeneratorTest extends GenerationTest {
         + "int a = 5;\nint b = 6;\nassert a < b;\n}\n}\n",
         "Test", "Test.m");
     assertTranslation(translation,
-        "JreAssert((a < b), (@\"Test.java:4 condition failed: assert a < b;\"))");
+        "JreAssert(a < b, @\"Test.java:4 condition failed: assert a < b;\")");
   }
 
   public void testAssertWithDescription() throws IOException {
@@ -1177,7 +1167,7 @@ public class StatementGeneratorTest extends GenerationTest {
         + "int a = 5; int b = 6; assert a < b : \"a should be lower than b\";}}",
         "Test", "Test.m");
     assertTranslation(translation,
-        "JreAssert((a < b), (@\"a should be lower than b\"))");
+        "JreAssert(a < b, @\"a should be lower than b\")");
   }
 
   public void testAssertWithDynamicDescription() throws IOException {
@@ -1186,7 +1176,7 @@ public class StatementGeneratorTest extends GenerationTest {
         + "int a = 5; int b = 6; assert a < b : a + \" should be lower than \" + b;}}",
         "Test", "Test.m");
     assertTranslation(translation,
-        "JreAssert((a < b), (JreStrcat(\"I$I\", a, @\" should be lower than \", b)));");
+        "JreAssert(a < b, JreStrcat(\"I$I\", a, @\" should be lower than \", b));");
   }
 
   // Verify that a Unicode escape sequence is preserved with string
@@ -1361,9 +1351,12 @@ public class StatementGeneratorTest extends GenerationTest {
         + "      else { throw new SecondException(); }"
         + "    } catch (FirstException|SecondException e) { throw e; }}}",
         "Test", "Test.m");
-    assertTranslation(translation, "@catch (Test_FirstException *e) {\n    @throw e;\n  }");
-    assertTranslation(translation, "@catch (Test_SecondException *e) {\n    @throw e;\n  }");
-    assertNotInTranslation(translation, "@catch (JavaLangException *e) {\n    @throw e;\n  }");
+    assertTranslation(translation,
+        "@catch (Test_FirstException *e) {\n    @throw e;\n  }");
+    assertTranslation(translation,
+        "@catch (Test_SecondException *e) {\n    @throw e;\n  }");
+    assertNotInTranslation(translation,
+        "@catch (JavaLangException *e) {\n    @throw e;\n  }");
   }
 
   public void testDifferentTypesInConditionalExpression() throws IOException {
@@ -1376,7 +1369,7 @@ public class StatementGeneratorTest extends GenerationTest {
   // Verify that when a method invocation returns an object that is ignored,
   // it is cast to (void) to avoid a clang warning when compiling with ARC.
   public void testVoidedUnusedInvocationReturn() throws IOException {
-    Options.setMemoryManagementOption(MemoryManagementOption.ARC);
+    options.setMemoryManagementOption(MemoryManagementOption.ARC);
     String translation = translateSourceFile(
         "class Test { void test() {"
         + "  StringBuilder sb = new StringBuilder();"
@@ -1384,139 +1377,7 @@ public class StatementGeneratorTest extends GenerationTest {
         + "  new Throwable(); }}",
         "Test", "Test.m");
     assertTranslation(translation, "(void) [sb appendWithNSString:@\"hello, world\"];");
-    assertTranslation(translation, "(void) new_NSException_init();");
-  }
-
-  // Verify minimal try-with-resources translation.
-  public void testTryWithResourceNoCatchOrFinally() throws IOException {
-    String translation = translateSourceFile(
-        "import java.io.*; public class Test { String test(String path) throws IOException { "
-        + "  try (BufferedReader br = new BufferedReader(new FileReader(path))) {"
-        + "    return br.readLine(); } }}",
-        "Test", "Test.m");
-    assertTranslatedLines(translation,
-        "JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
-        + "create_JavaIoFileReader_initWithNSString_(path));",
-        "NSException *__primaryException1 = nil;",
-        "@try {",
-        "  return [br readLine];",
-        "}",
-        "@catch (NSException *e) {",
-        "  __primaryException1 = e;",
-        "  @throw e;",
-        "}",
-        "@finally {",
-        "  if (br != nil) {",
-        "    if (__primaryException1 != nil) {",
-        "      @try {",
-        "        [br close];",
-        "      } @catch (NSException *e) {",
-        "        [__primaryException1 addSuppressedWithNSException:e];",
-        "      }",
-        "    } else {",
-        "      [br close];",
-        "    }",
-        "  }",
-        "}");
-  }
-
-  // Verify try-with-resources translation with multiple resources.
-  public void testTryWithMultipleResourceNoCatchOrFinally() throws IOException {
-    String translation = translateSourceFile(
-        "import java.io.*; public class Test { String test(String path) throws IOException { "
-        + "  try (BufferedReader br = new BufferedReader(new FileReader(path));"
-        + "       BufferedReader br2 = new BufferedReader(new FileReader(path))) {"
-        + "    return br.readLine(); } }}",
-        "Test", "Test.m");
-    assertTranslatedLines(translation,
-        "JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
-            + "create_JavaIoFileReader_initWithNSString_(path));",
-        "NSException *__primaryException2 = nil;",
-        "@try {",
-        " JavaIoBufferedReader *br2 = create_JavaIoBufferedReader_initWithJavaIoReader_("
-            + "create_JavaIoFileReader_initWithNSString_(path));",
-        " NSException *__primaryException1 = nil;",
-        " @try {",
-        "  return [br readLine];",
-        " }",
-        " @catch (NSException *e) {",
-        "  __primaryException1 = e;",
-        "  @throw e;",
-        " }",
-        " @finally {",
-        "  if (br2 != nil) {",
-        "    if (__primaryException1 != nil) {",
-        "      @try {",
-        "        [br2 close];",
-        "      } @catch (NSException *e) {",
-        "        [__primaryException1 addSuppressedWithNSException:e];",
-        "      }",
-        "    } else {",
-        "      [br2 close];",
-        "    }",
-        "  }",
-        " }",
-        "}",
-        "@catch (NSException *e) {",
-        " __primaryException2 = e;",
-        " @throw e;",
-        "}",
-        "@finally {",
-        " if (br != nil) {",
-        "  if (__primaryException2 != nil) {",
-        "   @try {",
-        "    [br close];",
-        "   } @catch (NSException *e) {",
-        "    [__primaryException2 addSuppressedWithNSException:e];",
-        "   }",
-        "  } else {",
-        "   [br close];",
-        "  }",
-        " }",
-        "}");
-  }
-
-  // Verify try-with-resources translation is inside of try block with catch clause outside.
-  public void testTryWithResourceAndCatch() throws IOException {
-    String translation = translateSourceFile(
-        "import java.io.*; public class Test { String test(String path) throws IOException { "
-        + "  try (BufferedReader br = new BufferedReader(new FileReader(path))) {"
-        + "    return br.readLine(); "
-        + "  } catch (IOException e) {"
-        + "    System.out.println(e);"
-        + "    throw e;"
-        + "  } }}",
-        "Test", "Test.m");
-    assertTranslatedLines(translation,
-        "@try {",
-        " JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
-        + "create_JavaIoFileReader_initWithNSString_(path));",
-        " NSException *__primaryException1 = nil;",
-        " @try {",
-        "  return [br readLine];",
-        " }",
-        " @catch (NSException *e) {",
-        "  __primaryException1 = e;",
-        "  @throw e;",
-        " }",
-        " @finally {",
-        "  if (br != nil) {",
-        "   if (__primaryException1 != nil) {",
-        "    @try {",
-        "     [br close];",
-        "    } @catch (NSException *e) {",
-        "     [__primaryException1 addSuppressedWithNSException:e];",
-        "    }",
-        "   } else {",
-        "    [br close];",
-        "   }",
-        "  }",
-        " }",
-        "}",
-        "@catch (JavaIoIOException *e) {",
-        " [((JavaIoPrintStream *) nil_chk(JreLoadStatic(JavaLangSystem, out))) printlnWithId:e];",
-        " @throw e;",
-        "}");
+    assertTranslation(translation, "(void) new_JavaLangThrowable_init();");
   }
 
   // Verify that multiple resources are closed in reverse order from opening.
@@ -1721,5 +1582,20 @@ public class StatementGeneratorTest extends GenerationTest {
         + "void test() { "
         + "  int foo; }}", "Test", "Test.m");
     assertTranslation(translation, "__unused jint foo;");
+  }
+
+  // Verify that empty statements line offset to owning statement is preserved.
+  public void testEmptyStatementFormatting() throws IOException {
+    String translation = translateSourceFile(
+        "class Test {\n"
+        + "  void foo(int a, int b) {\n"
+        + "    if (a < b) ;\n"  // Empty statement on same line as if statement.
+        + "  }\n"
+        + "  void bar(int c, int d) {\n"
+        + "    if (c < d)\n"
+        + "      ;\n"           // Empty statement on different line than if statement.
+        + "  }}", "Test", "Test.m");
+    assertTranslation(translation, "if (a < b) ;");
+    assertTranslatedLines(translation, "if (c < d)", ";");
   }
 }

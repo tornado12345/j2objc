@@ -48,18 +48,17 @@ namespace j2objc {
 
 namespace {
 
-void AddHeaderImports(set<string> &imports) {
+void AddHeaderImports(std::set<string> &imports) {
   imports.insert("J2ObjC_header.h");
   imports.insert("com/google/protobuf/GeneratedMessage.h");
   imports.insert("com/google/protobuf/ProtocolMessageEnum.h");
   imports.insert("java/lang/Enum.h");
 }
 
-void AddSourceImports(set<string> &imports) {
+void AddSourceImports(std::set<string> &imports) {
   imports.insert("J2ObjC_source.h");
   imports.insert("com/google/protobuf/RepeatedField.h");
   imports.insert("com/google/protobuf/Descriptors_PackagePrivate.h");
-  imports.insert("java/lang/IllegalArgumentException.h");
 }
 
 void PrintSourcePreamble(io::Printer *printer) {
@@ -70,23 +69,23 @@ void PrintSourcePreamble(io::Printer *printer) {
       "#pragma clang diagnostic ignored \"-Wincomplete-implementation\"\n");
 }
 
-void PrintImports(const set<string> &imports, io::Printer *printer) {
-  if (!imports.empty()) {
+void PrintImports(const std::set<string>* imports, io::Printer *printer) {
+  if (!imports->empty()) {
     printer->Print("\n");
   }
-  for (set<string>::const_iterator it = imports.begin(); it != imports.end();
-       it++) {
+  for (std::set<string>::const_iterator it = imports->begin();
+       it != imports->end(); it++) {
     printer->Print("#import \"$header$\"\n", "header", *it);
   }
 }
 
-void PrintForwardDeclarations(const set<string> &declarations,
+void PrintForwardDeclarations(const std::set<string>* declarations,
                               io::Printer *printer) {
-  if (!declarations.empty()) {
+  if (!declarations->empty()) {
     printer->Print("\n");
   }
-  for (set<string>::const_iterator it = declarations.begin();
-       it != declarations.end(); it++) {
+  for (std::set<string>::const_iterator it = declarations->begin();
+       it != declarations->end(); it++) {
     printer->Print("$declaration$;\n", "declaration", *it);
   }
 }
@@ -159,7 +158,7 @@ void FileGenerator::GenerateSourceBoilerplate(io::Printer* printer) {
 }
 
 void FileGenerator::GenerateHeader(GeneratorContext* context,
-                                   vector<string>* file_list) {
+                                   std::vector<string>* file_list) {
   string filename = GetFileName(".h");
   file_list->push_back(filename);
 
@@ -168,33 +167,24 @@ void FileGenerator::GenerateHeader(GeneratorContext* context,
 
   GenerateHeaderBoilerplate(&printer);
 
-  set<string> headers;
+  std::set<string> headers;
   AddHeaderImports(headers);
-  set<string> declarations;
+  std::set<string> declarations;
   declarations.insert("@class ComGoogleProtobufExtensionRegistry");
   declarations.insert("@class ComGoogleProtobufExtensionRegistryLite");
 
   if (!GenerateMultipleFiles()) {
     for (int i = 0; i < file_->message_type_count(); i++) {
       MessageGenerator generator(file_->message_type(i));
-      generator.CollectMessageOrBuilderImports(headers);
-      generator.CollectForwardDeclarations(declarations);
-      generator.CollectMessageOrBuilderForwardDeclarations(declarations);
+      generator.CollectMessageOrBuilderImports(&headers);
+      generator.CollectHeaderImports(&headers);
+      generator.CollectForwardDeclarations(&declarations);
+      generator.CollectMessageOrBuilderForwardDeclarations(&declarations);
     }
   }
 
-  PrintImports(headers, &printer);
-  PrintForwardDeclarations(declarations, &printer);
-
-  // need to write out all enums first
-  if (!GenerateMultipleFiles()) {
-    for (int i = 0; i < file_->enum_type_count(); i++) {
-      EnumGenerator(file_->enum_type(i)).GenerateHeader(&printer);
-    }
-    for (int i = 0; i < file_->message_type_count(); i++) {
-      MessageGenerator(file_->message_type(i)).GenerateEnumHeader(&printer);
-    }
-  }
+  PrintImports(&headers, &printer);
+  PrintForwardDeclarations(&declarations, &printer);
 
   printer.Print("\n"
       "@interface $classname$ : NSObject\n"
@@ -234,16 +224,20 @@ void FileGenerator::GenerateHeader(GeneratorContext* context,
   }
 
   if (!GenerateMultipleFiles()) {
+    for (int i = 0; i < file_->enum_type_count(); i++) {
+      EnumGenerator(file_->enum_type(i)).GenerateHeader(&printer);
+    }
+
     for (int i = 0; i < file_->message_type_count(); i++) {
       MessageGenerator generator(file_->message_type(i));
       generator.GenerateMessageOrBuilder(&printer);
-      generator.GenerateMessageHeader(&printer);
+      generator.GenerateHeader(&printer);
     }
   }
 }
 
 void FileGenerator::GenerateSource(GeneratorContext* context,
-                                   vector<string>* file_list) {
+                                   std::vector<string>* file_list) {
   string filename = GetFileName(".m");
   file_list->push_back(filename);
 
@@ -252,22 +246,27 @@ void FileGenerator::GenerateSource(GeneratorContext* context,
 
   GenerateSourceBoilerplate(&printer);
 
-  set<string> headers;
+  std::set<string> headers;
   AddSourceImports(headers);
   headers.insert(GetFileName(".h"));
   headers.insert("com/google/protobuf/ExtensionRegistry.h");
   headers.insert("com/google/protobuf/ExtensionRegistryLite.h");
-  for (int i = 0; i < file_->message_type_count(); i++) {
-    if (GenerateMultipleFiles()) {
+  if (GenerateMultipleFiles()) {
+    for (int i = 0; i < file_->message_type_count(); i++) {
       headers.insert(GetHeader(file_->message_type(i)));
-    } else {
-      MessageGenerator(file_->message_type(i)).CollectSourceImports(headers);
+    }
+  } else {
+    for (int i = 0; i < file_->message_type_count(); i++) {
+      MessageGenerator(file_->message_type(i)).CollectSourceImports(&headers);
+    }
+    for (int i = 0; i < file_->enum_type_count(); i++) {
+      EnumGenerator(file_->enum_type(i)).CollectSourceImports(&headers);
     }
   }
   for (int i = 0; i < file_->extension_count(); i++) {
-    ExtensionGenerator(file_->extension(i)).CollectSourceImports(headers);
+    ExtensionGenerator(file_->extension(i)).CollectSourceImports(&headers);
   }
-  PrintImports(headers, &printer);
+  PrintImports(&headers, &printer);
   PrintSourcePreamble(&printer);
 
   if (file_->extension_count() > 0) {
@@ -309,6 +308,10 @@ void FileGenerator::GenerateSource(GeneratorContext* context,
     }
     printer.Outdent();
     printer.Print("};\n");
+    for (int i = 0; i < file_->extension_count(); i++) {
+      ExtensionGenerator(file_->extension(i))
+          .GenerateNonStaticFieldData(&printer, "extensionFields", i);
+    }
     for (int i = 0; i < file_->extension_count(); i++) {
       ExtensionGenerator(file_->extension(i))
           .GenerateSourceInitializer(&printer);
@@ -366,13 +369,13 @@ string FileGenerator::GetFileName(string suffix) {
 };
 
 void FileGenerator::Generate(GeneratorContext* context,
-                             vector<string>* file_list) {
+                             std::vector<string>* file_list) {
   GenerateHeader(context, file_list);
   GenerateSource(context, file_list);
 }
 
 void FileGenerator::GenerateEnumHeader(GeneratorContext* context,
-                                       vector<string>* file_list,
+                                       std::vector<string>* file_list,
                                        const EnumDescriptor* descriptor) {
   string filename = output_dir_ + descriptor->name() + ".h";
   file_list->push_back(filename);
@@ -380,16 +383,16 @@ void FileGenerator::GenerateEnumHeader(GeneratorContext* context,
   io::Printer printer(output.get(), '$');
 
   GenerateBoilerplate(&printer);
-  set<string> headers;
+  std::set<string> headers;
   AddHeaderImports(headers);
-  PrintImports(headers, &printer);
+  PrintImports(&headers, &printer);
 
   EnumGenerator generator(descriptor);
   generator.GenerateHeader(&printer);
 }
 
 void FileGenerator::GenerateEnumSource(GeneratorContext* context,
-                                       vector<string>* file_list,
+                                       std::vector<string>* file_list,
                                        const EnumDescriptor* descriptor) {
   string filename = output_dir_ + descriptor->name() + ".m";
   file_list->push_back(filename);
@@ -398,17 +401,18 @@ void FileGenerator::GenerateEnumSource(GeneratorContext* context,
 
   GenerateBoilerplate(&printer);
 
-  set<string> headers;
+  EnumGenerator generator(descriptor);
+  std::set<string> headers;
   headers.insert(output_dir_ + descriptor->name() + ".h");
   AddSourceImports(headers);
-  PrintImports(headers, &printer);
+  generator.CollectSourceImports(&headers);
+  PrintImports(&headers, &printer);
 
-  EnumGenerator generator(descriptor);
   generator.GenerateSource(&printer);
 }
 
 void FileGenerator::GenerateMessageHeader(GeneratorContext* context,
-                                          vector<string>* file_list,
+                                          std::vector<string>* file_list,
                                           const Descriptor* descriptor) {
   string filename = output_dir_ + descriptor->name() + ".h";
   file_list->push_back(filename);
@@ -416,20 +420,22 @@ void FileGenerator::GenerateMessageHeader(GeneratorContext* context,
   io::Printer printer(output.get(), '$');
 
   GenerateBoilerplate(&printer);
-  set<string> headers;
-  headers.insert(output_dir_ + descriptor->name() + "OrBuilder.h");
-  AddHeaderImports(headers);
-  PrintImports(headers, &printer);
 
   MessageGenerator generator(descriptor);
-  set<string> declarations;
-  generator.CollectForwardDeclarations(declarations);
-  PrintForwardDeclarations(declarations, &printer);
+  std::set<string> headers;
+  headers.insert(output_dir_ + descriptor->name() + "OrBuilder.h");
+  AddHeaderImports(headers);
+  generator.CollectHeaderImports(&headers);
+  PrintImports(&headers, &printer);
+
+  std::set<string> declarations;
+  generator.CollectForwardDeclarations(&declarations);
+  PrintForwardDeclarations(&declarations, &printer);
   generator.GenerateHeader(&printer);
 }
 
 void FileGenerator::GenerateMessageSource(GeneratorContext* context,
-                                          vector<string>* file_list,
+                                          std::vector<string>* file_list,
                                           const Descriptor* descriptor) {
   string filename = output_dir_ + descriptor->name() + ".m";
   file_list->push_back(filename);
@@ -439,17 +445,17 @@ void FileGenerator::GenerateMessageSource(GeneratorContext* context,
   GenerateBoilerplate(&printer);
 
   MessageGenerator generator(descriptor);
-  set<string> headers;
+  std::set<string> headers;
   headers.insert(output_dir_ + descriptor->name() + ".h");
-  generator.CollectSourceImports(headers);
+  generator.CollectSourceImports(&headers);
   AddSourceImports(headers);
-  PrintImports(headers, &printer);
+  PrintImports(&headers, &printer);
   PrintSourcePreamble(&printer);
   generator.GenerateSource(&printer);
 }
 
 void FileGenerator::GenerateMessageOrBuilder(GeneratorContext* context,
-                                             vector<string>* file_list,
+                                             std::vector<string>* file_list,
                                              const Descriptor* descriptor) {
   string filename = output_dir_ + descriptor->name() + "OrBuilder.h";
   file_list->push_back(filename);
@@ -459,18 +465,18 @@ void FileGenerator::GenerateMessageOrBuilder(GeneratorContext* context,
   GenerateBoilerplate(&printer);
   MessageGenerator generator(descriptor);
 
-  set<string> headers;
-  generator.CollectMessageOrBuilderImports(headers);
-  PrintImports(headers, &printer);
+  std::set<string> headers;
+  generator.CollectMessageOrBuilderImports(&headers);
+  PrintImports(&headers, &printer);
 
-  set<string> declarations;
-  generator.CollectMessageOrBuilderForwardDeclarations(declarations);
-  PrintForwardDeclarations(declarations, &printer);
+  std::set<string> declarations;
+  generator.CollectMessageOrBuilderForwardDeclarations(&declarations);
+  PrintForwardDeclarations(&declarations, &printer);
   generator.GenerateMessageOrBuilder(&printer);
 }
 
 void FileGenerator::GenerateSiblings(GeneratorContext* context,
-                                     vector<string>* file_list) {
+                                     std::vector<string>* file_list) {
   if (GenerateMultipleFiles()) {
     for (int i = 0; i < file_->enum_type_count(); i++) {
       GenerateEnumHeader(context, file_list, file_->enum_type(i));

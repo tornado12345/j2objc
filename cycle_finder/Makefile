@@ -34,22 +34,23 @@ TEST_CLASS_DIR = $(BUILD_DIR)/test
 TRANSLATOR_CLASS_DIR = $(J2OBJC_ROOT)/translator/$(CLASS_DIR)
 
 JAVA_SOURCES = \
-    com/google/devtools/cyclefinder/CaptureFields.java \
     com/google/devtools/cyclefinder/CycleFinder.java \
     com/google/devtools/cyclefinder/Edge.java \
+    com/google/devtools/cyclefinder/GraphBuilder.java \
     com/google/devtools/cyclefinder/NameList.java \
+    com/google/devtools/cyclefinder/NameUtil.java \
     com/google/devtools/cyclefinder/Options.java \
     com/google/devtools/cyclefinder/ReferenceGraph.java \
-    com/google/devtools/cyclefinder/Tarjans.java \
-    com/google/devtools/cyclefinder/TypeCollector.java
+    com/google/devtools/cyclefinder/Tarjans.java
 
 RESOURCES = \
     com/google/devtools/cyclefinder/CycleFinder.properties \
     com/google/devtools/j2objc/J2ObjC.properties \
-    com/google/devtools/j2objc/JRE.mappings
+    com/google/devtools/j2objc/JRE.mappings \
+    com/google/devtools/j2objc/reserved_names.txt
 
 DIST_DEPS = $(JSR305_JAR) j2objc_annotations.jar
-INTERNAL_DEPS = $(ECLIPSE_JARS) $(GUAVA_JAR) $(ASM_JAR) $(JAVAC_JAR)
+INTERNAL_DEPS = $(GUAVA_JAR) $(JAVAC_JAR) $(PROCYON_JARS)
 JAR_DEPS_DIST = $(DIST_DEPS:%=$(DIST_JAR_DIR)/%) $(INTERNAL_DEPS:%=$(JAVA_DEPS_JAR_DIR)/%)
 JAR_DEPS_PATH = $(subst $(eval) ,:,$(strip $(JAR_DEPS_DIST)))
 JUNIT_JAR_DIST = $(DIST_JAR_DIR)/$(JUNIT_JAR)
@@ -65,8 +66,6 @@ RESOURCE_FILES = $(RESOURCES:%=$(CLASS_DIR)/%)
 TEST_CLASSPATH = \
     $(CLASS_DIR):$(JAR_DEPS_PATH):$(TEST_CLASS_DIR):$(JUNIT_JAR_DIST):$(TRANSLATOR_CLASS_DIR)
 
-ALL_LIBS = $(JAR) $(ECLIPSE_LIBS)
-
 # Files in dependent jars that aren't needed in combined jar.
 UNUSED_JAR_CONTENTS = \
   $(CLASS_DIR)/[A-Z]* \
@@ -77,6 +76,12 @@ UNUSED_JAR_CONTENTS = \
   $(CLASS_DIR)/hook* \
   $(CLASS_DIR)/jdt*
 
+ifeq ($(shell uname), Linux)
+PRUNE_CMD = bash -O globasciiranges -c "rm -rf $(UNUSED_JAR_CONTENTS)"
+else
+PRUNE_CMD = rm -rf $(UNUSED_JAR_CONTENTS)
+endif
+
 default: $(JAR)
 	@:
 
@@ -86,13 +91,13 @@ clean:
 $(JAR): $(MANIFEST) $(RESOURCE_FILES) $(JAVA_SOURCES_FULL) \
   | $(CLASS_DIR) java_deps_dist annotations_dist translator
 	@echo building cycle_finder jar
-	@javac -Xlint:unchecked -sourcepath $(JAVA_SOURCE_DIR):$(TRANSLATOR_SOURCE_DIR) \
+	@$(JAVAC) -Xlint:unchecked -sourcepath $(JAVA_SOURCE_DIR):$(TRANSLATOR_SOURCE_DIR) \
 	    -classpath $(JAR_DEPS_PATH) -encoding UTF-8 \
 	    -d $(CLASS_DIR) -source 1.8 -target 1.8 -nowarn $(JAVA_SOURCES:%=$(JAVA_SOURCE_DIR)/%)
 	@for lib in $(JAR_DEPS_DIST); do unzip -oq $$lib -d $(CLASS_DIR); done
-	@rm -rf $(UNUSED_JAR_CONTENTS)
+	@$(PRUNE_CMD)
 	@jar cfm $@-combined $(MANIFEST) -C $(CLASS_DIR) .
-	@java -jar $(JAVA_DEPS_JAR_DIR)/$(JARJAR_JAR) process jarjar.rules $@-combined $@
+	@$(JAVA) -jar $(JAVA_DEPS_JAR_DIR)/$(JARJAR_JAR) process jarjar.rules $@-combined $@
 
 # Format manifest classpath with each jar on a separate line, to avoid
 # maximum line length of 72 bytes in UTF-8 encoding.
@@ -126,10 +131,10 @@ dist: $(JAR_DIST) $(DIST_DIR)/cycle_finder
 	@:
 
 test: compile-tests
-	java -classpath $(TEST_CLASSPATH) junit.textui.TestRunner \
+	$(JAVA) -classpath $(TEST_CLASSPATH) junit.textui.TestRunner \
 	    com.google.devtools.cyclefinder.CycleFinderTest
 
 compile-tests: $(JAR) | $(TEST_CLASS_DIR)
-	javac -encoding UTF-8 -sourcepath src/test/java \
+	$(JAVAC) -encoding UTF-8 -sourcepath src/test/java \
 	    -classpath $(TEST_CLASSPATH) -d $(TEST_CLASS_DIR) \
 	    src/test/java/com/google/devtools/cyclefinder/CycleFinderTest.java

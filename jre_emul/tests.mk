@@ -24,10 +24,8 @@ include environment.mk
 include test_sources.mk
 include $(J2OBJC_ROOT)/make/translate_macros.mk
 
-
-ALL_TEST_SOURCES = $(TEST_SOURCES) $(JAVA8_TEST_SOURCES) $(ARC_TEST_SOURCES) \
-  $(COPIED_ARC_TEST_SOURCES)
-ALL_SUITE_SOURCES = $(SUITE_SOURCES) $(JAVA8_SUITE_SOURCES)
+ALL_TEST_SOURCES = $(TEST_SOURCES) $(ARC_TEST_SOURCES) $(COPIED_ARC_TEST_SOURCES)
+ALL_SUITE_SOURCES = $(SUITE_SOURCES)
 
 TESTS_TO_RUN = $(filter-out $(TESTS_TO_SKIP),$(ALL_TEST_SOURCES))
 TESTS_TO_RUN := $(subst /,.,$(TESTS_TO_RUN:%.java=%))
@@ -49,7 +47,14 @@ JUNIT_DIST_JAR = $(DIST_JAR_DIR)/$(JUNIT_JAR)
 INCLUDE_DIRS = $(TESTS_DIR) $(TESTS_DIR)/arc $(CLASS_DIR) $(EMULATION_CLASS_DIR)
 INCLUDE_ARGS = $(INCLUDE_DIRS:%=-I%)
 
-TEST_JOCC := ../dist/j2objcc -g $(WARNINGS)
+ifdef DEVELOPER_DIR
+J2OBJCC := DEVELOPER_DIR=$(DEVELOPER_DIR) ../dist/j2objcc
+else
+J2OBJCC := ../dist/j2objcc
+endif
+
+SDK_PATH = $(shell xcrun --show-sdk-path)
+TEST_JOCC := $(J2OBJCC) -g $(WARNINGS) -isysroot $(SDK_PATH)
 LINK_FLAGS := -ljre_emul -l junit -L$(TESTS_DIR) -l test-support
 COMPILE_FLAGS := $(INCLUDE_ARGS) -c -Wno-objc-redundant-literal-use -Wno-format -Werror \
   -Wno-parentheses
@@ -63,14 +68,11 @@ endif
 SUPPORT_LIB = $(TESTS_DIR)/libtest-support.a
 TEST_BIN = $(TESTS_DIR)/jre_unit_tests
 
-TRANSLATE_ARGS = -q -classpath $(JUNIT_DIST_JAR) -Werror -sourcepath $(TEST_SRC):$(GEN_JAVA_DIR) \
-    --extract-unsequenced -encoding UTF-8 \
-    --prefixes Tests/resources/prefixes.properties
+TRANSLATE_ARGS = -classpath $(JUNIT_DIST_JAR) -Werror -sourcepath $(TEST_SRC):$(GEN_JAVA_DIR) \
+    -encoding UTF-8 --prefixes Tests/resources/prefixes.properties
 TRANSLATE_SOURCES = $(SUPPORT_SOURCES) $(TEST_SOURCES) $(SUITE_SOURCES) $(ALL_TESTS_CLASS).java
-TRANSLATE_SOURCES_JAVA8 = $(JAVA8_TEST_SOURCES) $(JAVA8_SUITE_SOURCES)
 TRANSLATE_SOURCES_ARC = $(ARC_TEST_SOURCES) $(COPIED_ARC_TEST_SOURCES)
 TRANSLATED_OBJC = $(TRANSLATE_SOURCES:%.java=$(TESTS_DIR)/%.m)
-TRANSLATED_OBJC_JAVA8 = $(TRANSLATE_SOURCES_JAVA8:%.java=$(TESTS_DIR)/%.m)
 TRANSLATED_OBJC_ARC = $(TRANSLATE_SOURCES_ARC:%.java=$(TESTS_DIR)/arc/%.m)
 
 TRANSLATE_ARTIFACT := $(call emit_translate_rule,\
@@ -80,13 +82,6 @@ TRANSLATE_ARTIFACT := $(call emit_translate_rule,\
   ,\
   $(TRANSLATE_ARGS))
 
-TRANSLATE_ARTIFACT_JAVA8 := $(call emit_translate_rule,\
-  jre_emul_tests_java8,\
-  $(TESTS_DIR),\
-  $(JAVA8_TEST_SOURCES) $(JAVA8_SUITE_SOURCES),\
-  ,\
-  $(TRANSLATE_ARGS) -source 8)
-
 TRANSLATE_ARTIFACT_ARC := $(call emit_translate_rule,\
   jre_emul_tests_arc,\
   $(TESTS_DIR)/arc,\
@@ -94,7 +89,7 @@ TRANSLATE_ARTIFACT_ARC := $(call emit_translate_rule,\
   ,\
   $(TRANSLATE_ARGS) -use-arc)
 
-TRANSLATE_ARTIFACTS = $(TRANSLATE_ARTIFACT) $(TRANSLATE_ARTIFACT_JAVA8) $(TRANSLATE_ARTIFACT_ARC)
+TRANSLATE_ARTIFACTS = $(TRANSLATE_ARTIFACT) $(TRANSLATE_ARTIFACT_ARC)
 
 # Make sure any generated source files are generated prior to translation.
 translate_dependencies: $(COPIED_ARC_TEST_SOURCES:%=$(GEN_JAVA_DIR)/%)
@@ -102,10 +97,15 @@ translate_dependencies: $(COPIED_ARC_TEST_SOURCES:%=$(GEN_JAVA_DIR)/%)
 $(TRANSLATED_OBJC): $(TRANSLATE_ARTIFACT)
 	@:
 
-$(TRANSLATED_OBJC_JAVA8): $(TRANSLATE_ARTIFACT_JAVA8)
+$(TRANSLATED_OBJC_ARC): $(TRANSLATE_ARTIFACT_ARC)
 	@:
 
-$(TRANSLATED_OBJC_ARC): $(TRANSLATE_ARTIFACT_ARC)
+DIST_JRE_EMUL_LIB = $(DIST_LIB_MACOSX_DIR)/libjre_emul.a
+$(DIST_JRE_EMUL_LIB): jre_emul_dist
+	@:
+
+DIST_JUNIT_LIB = $(DIST_LIB_MACOSX_DIR)/libjunit.a
+$(DIST_JUNIT_LIB): junit_dist
 	@:
 
 ifdef GENERATE_TEST_COVERAGE
@@ -114,7 +114,11 @@ endif
 
 all-tests: test run-xctests
 
-test: run-tests
+test: print-tools-env run-tests
+
+print-tools-env:
+	@echo clang path: `xcrun --find clang`
+	@echo SDK path: `xcrun --show-sdk-path`
 
 support-lib: $(SUPPORT_LIB)
 
@@ -131,8 +135,8 @@ resources: $(TEST_RESOURCES)
 
 define resource_copy_rule
 $(RESOURCES_DEST_DIR)/%: $(1)/%
-	@mkdir -p `dirname $$@`
-	@cp $$< $$@
+	@mkdir -p $$(@D)
+	@install -m 0644 $$< $$@
 endef
 
 $(foreach root,$(TEST_RESOURCE_ROOTS),$(eval $(call resource_copy_rule,$(root))))
@@ -178,6 +182,9 @@ run-concurrency-tests: link resources $(TEST_BIN)
 run-io-tests: link resources $(TEST_BIN)
 	@$(TEST_BIN) org.junit.runner.JUnitCore libcore.java.io.SmallTests
 
+run-ios-security-provider-tests: link resources $(TEST_BIN)
+	@$(TEST_BIN) org.junit.runner.JUnitCore com.google.j2objc.security.IosSecurityProviderTests
+
 run-json-tests: link resources $(TEST_BIN)
 	@$(TEST_BIN) org.junit.runner.JUnitCore org.json.SmallTests
 
@@ -211,13 +218,13 @@ run-each-test: link resources $(TEST_BIN)
 # Build and run the JreEmulation project's test bundle, then close simulator app.
 # Note: the simulator app's name was changed to "Simulator" in Xcode 7.
 run-xctests: test
-	@xcodebuild -project JreEmulation.xcodeproj -target jre_emul -destination \
-	    'platform=iOS Simulator,name=iPhone 6' test
-	@killall 'iOS Simulator' || killall 'Simulator'
+	@xcrun xcodebuild -project JreEmulation.xcodeproj -scheme jre_emul -destination \
+	    'platform=iOS Simulator,name=iPhone 7 Plus' test
+	@killall 'Simulator'
 
 $(SUPPORT_LIB): $(SUPPORT_OBJS)
 	@echo libtool -o $(SUPPORT_LIB)
-	@libtool -static -o $(SUPPORT_LIB) $(SUPPORT_OBJS)
+	@xcrun libtool -static -o $(SUPPORT_LIB) $(SUPPORT_OBJS)
 
 clean:
 	@rm -rf $(TESTS_DIR)
@@ -236,20 +243,20 @@ $(TESTS_DIR)/%.o: $(TESTS_DIR)/arc/%.m | $(TRANSLATE_ARTIFACTS)
 	@$(TEST_JOCC) $(COMPILE_FLAGS) -fobjc-arc -o $@ $<
 
 $(TESTS_DIR)/%.o: $(ANDROID_NATIVE_TEST_DIR)/%.cpp | $(TESTS_DIR)
-	cc -g -I$(EMULATION_CLASS_DIR) -x objective-c++ -c $? -o $@ \
+	xcrun cc -g -I$(EMULATION_CLASS_DIR) -x objective-c++ -c $? -o $@ \
 	  -Werror -Wno-parentheses $(GCOV_FLAGS)
 
-$(TEST_BIN): $(TEST_OBJS) $(SUPPORT_LIB) \
-        ../dist/lib/macosx/libjre_emul.a ../dist/lib/macosx/libjunit.a
+$(TEST_BIN): $(TEST_OBJS) $(SUPPORT_LIB) $(DIST_JRE_EMUL_LIB) $(DIST_JUNIT_LIB)
 	@echo Building test executable...
+	@echo "  " $(TEST_JOCC) $(LINK_FLAGS) ...
 	@$(TEST_JOCC) $(LINK_FLAGS) -o $@ $(TEST_OBJS)
 
 $(ALL_TESTS_SOURCE): tests.mk
 	@mkdir -p $(@D)
 	@xcrun awk -f gen_all_tests.sh $(TESTS_TO_RUN) > $@
 
-$(TESTS_DIR)/jreinitialization: Tests/JreInitialization.m
-	@../dist/j2objcc -o $@ -ljre_emul -ObjC -Os $?
+$(TESTS_DIR)/jreinitialization: Tests/JreInitialization.m $(DIST_JRE_EMUL_LIB)
+	@$(J2OBJCC) -o $@ -ljre_emul -ObjC -Os Tests/JreInitialization.m
 
 $(GEN_JAVA_DIR)/com/google/j2objc/arc/%.java: $(MISC_TEST_ROOT)/com/google/j2objc/%.java
 	@mkdir -p $(@D)
@@ -258,56 +265,56 @@ $(GEN_JAVA_DIR)/com/google/j2objc/arc/%.java: $(MISC_TEST_ROOT)/com/google/j2obj
 
 $(TESTS_DIR)/core_size:
 	@mkdir -p $(@D)
-	../dist/j2objcc -o $@ -ObjC
+	$(J2OBJCC) -o $@ -ObjC
 
 $(TESTS_DIR)/full_jre_size:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_emul -o $@ -ObjC
+	$(J2OBJCC) -ljre_emul -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_io:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_io -o $@ -ObjC
+	$(J2OBJCC) -ljre_io -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_net:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_net -o $@ -ObjC
+	$(J2OBJCC) -ljre_net -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_util:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_util -o $@ -ObjC
+	$(J2OBJCC) -ljre_util -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_concurrent:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_concurrent -ljre_util -o $@ -ObjC
+	$(J2OBJCC) -ljre_concurrent -ljre_util -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_channels:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_channels -ljre_net -ljre_security -ljre_util -o $@ -ObjC
+	$(J2OBJCC) -ljre_channels -ljre_net -ljre_security -ljre_util -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_security:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_security -ljre_net -o $@ -ObjC
+	$(J2OBJCC) -ljre_security -ljre_net -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_ssl:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_ssl -ljre_security -ljre_net -ljre_util -o $@ -ObjC
+	$(J2OBJCC) -ljre_ssl -ljre_security -ljre_net -ljre_util -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_xml:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_xml -ljre_net -ljre_security -o $@ -ObjC
+	$(J2OBJCC) -ljre_xml -ljre_net -ljre_security -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_zip:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_zip -ljre_security -ljre_net -ljre_io -o $@ -ObjC
+	$(J2OBJCC) -ljre_zip -ljre_security -ljre_net -ljre_io -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_sql:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_sql -o $@ -ObjC
+	$(J2OBJCC) -ljre_sql -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_beans:
 	@mkdir -p $(@D)
-	../dist/j2objcc -ljre_beans -ljre_util -o $@ -ObjC
+	$(J2OBJCC) -ljre_beans -ljre_util -o $@ -ObjC
 
 $(TESTS_DIR)/core_plus_android_util:
 	@mkdir -p $(@D)
-	../dist/j2objcc -landroid_util -ljre_net -ljre_util -ljre_concurrent -ljre_security -o $@ -ObjC
+	$(J2OBJCC) -landroid_util -ljre_net -ljre_util -ljre_concurrent -ljre_security -o $@ -ObjC

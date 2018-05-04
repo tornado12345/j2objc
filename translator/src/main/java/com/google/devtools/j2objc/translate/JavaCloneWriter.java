@@ -15,7 +15,6 @@
 package com.google.devtools.j2objc.translate;
 
 import com.google.common.collect.Lists;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.Block;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.ExpressionStatement;
@@ -38,8 +37,11 @@ import com.google.devtools.j2objc.types.GeneratedExecutableElement;
 import com.google.devtools.j2objc.types.GeneratedVariableElement;
 import com.google.devtools.j2objc.types.PointerType;
 import com.google.devtools.j2objc.util.ElementUtil;
+import com.google.devtools.j2objc.util.NameTable;
+import com.google.devtools.j2objc.util.TypeUtil;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;
@@ -53,6 +55,11 @@ import javax.lang.model.type.TypeMirror;
 public class JavaCloneWriter extends UnitTreeVisitor {
 
   private static final String JAVA_CLONE_METHOD = "__javaClone:";
+
+  private final ExecutableElement releaseMethod =
+      GeneratedExecutableElement.newMethodWithSelector(
+          NameTable.RELEASE_METHOD, typeUtil.getVoid(), TypeUtil.NS_OBJECT)
+      .addModifiers(Modifier.PUBLIC);
 
   public JavaCloneWriter(CompilationUnit unit) {
     super(unit);
@@ -68,7 +75,7 @@ public class JavaCloneWriter extends UnitTreeVisitor {
       return;
     }
 
-    TypeMirror voidType = typeUtil.getVoidType();
+    TypeMirror voidType = typeUtil.getVoid();
     ExecutableElement javaCloneElement =
         GeneratedExecutableElement.newMethodWithSelector(JAVA_CLONE_METHOD, voidType, type)
         .addParameter(originalVar);
@@ -83,7 +90,7 @@ public class JavaCloneWriter extends UnitTreeVisitor {
     List<Statement> statements = body.getStatements();
 
     ExecutableElement javaCloneSuperElement = GeneratedExecutableElement.newMethodWithSelector(
-        JAVA_CLONE_METHOD, voidType, typeEnv.getJavaObjectElement());
+        JAVA_CLONE_METHOD, voidType, typeUtil.getJavaObject());
     SuperMethodInvocation superCall =
         new SuperMethodInvocation(new ExecutablePair(javaCloneSuperElement));
     superCall.addArgument(new SimpleName(originalVar));
@@ -111,22 +118,22 @@ public class JavaCloneWriter extends UnitTreeVisitor {
   }
 
   private Statement createReleaseStatement(VariableElement var) {
-    if (Options.useARC()) {
-      TypeMirror voidType = typeUtil.getVoidType();
+    if (options.useARC()) {
+      TypeMirror voidType = typeUtil.getVoid();
       FunctionElement element = new FunctionElement("JreRelease", voidType, null)
-          .addParameters(typeEnv.getIdTypeMirror());
+          .addParameters(TypeUtil.ID_TYPE);
       FunctionInvocation invocation = new FunctionInvocation(element, voidType);
       invocation.addArgument(new SimpleName(var));
       return new ExpressionStatement(invocation);
     } else {
       return new ExpressionStatement(
-          new MethodInvocation(typeEnv.getReleaseMethod(), new SimpleName(var)));
+          new MethodInvocation(new ExecutablePair(releaseMethod), new SimpleName(var)));
     }
   }
 
   private Statement createVolatileCloneStatement(
       VariableElement var, VariableElement originalVar, boolean isWeak) {
-    TypeMirror voidType = typeEnv.resolveJavaTypeMirror("void");
+    TypeMirror voidType = typeUtil.getVoid();
     TypeMirror pointerType = new PointerType(var.asType());
     String funcName = "JreCloneVolatile" + (isWeak ? "" : "Strong");
     FunctionElement element = new FunctionElement(funcName, voidType, null)

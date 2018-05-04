@@ -16,17 +16,15 @@
 
 package com.google.devtools.j2objc.types;
 
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.devtools.j2objc.Options;
-import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.TranslationEnvironment;
-
-import org.eclipse.jdt.core.dom.ITypeBinding;
-
 import java.util.Collection;
 import java.util.Set;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Description of an imported type. Imports are equal if their fully qualified
@@ -36,24 +34,21 @@ import java.util.Set;
  */
 public class Import implements Comparable<Import> {
 
-  private static final Set<String> FOUNDATION_TYPES = ImmutableSet.of("id",
-      "NSCopying", "NSException", "NSNumber", "NSObject", "NSString", "NSZone");
-
   private final String typeName;
   private final String importFileName;
   private final String javaQualifiedName;
   private final boolean isInterface;
 
-  private Import(ITypeBinding type, NameTable nameTable) {
+  private Import(TypeElement type, NameTable nameTable, Options options) {
     this.typeName = nameTable.getFullName(type);
-    ITypeBinding mainType = type;
-    while (!mainType.isTopLevel()) {
-      mainType = mainType.getDeclaringClass();
+    TypeElement mainType = type;
+    while (!ElementUtil.isTopLevel(mainType)) {
+      mainType = ElementUtil.getDeclaringClass(mainType);
     }
-    this.importFileName = Options.getHeaderMap().get(mainType);
+    this.importFileName = options.getHeaderMap().get(mainType);
     this.javaQualifiedName =
-        mainType instanceof IOSTypeBinding ? null : mainType.getQualifiedName();
-    this.isInterface = type.isInterface();
+        ElementUtil.isIosType(mainType) ? null : ElementUtil.getQualifiedName(mainType);
+    this.isInterface = type.getKind().isInterface();
   }
 
   /**
@@ -108,25 +103,23 @@ public class Import implements Comparable<Import> {
     return typeName;
   }
 
-  public static Set<Import> getImports(ITypeBinding binding, TranslationEnvironment env) {
+  public static Set<Import> getImports(TypeMirror type, TranslationEnvironment env) {
     Set<Import> result = Sets.newLinkedHashSet();
-    addImports(binding, result, env);
+    addImports(type, result, env);
     return result;
   }
 
   public static void addImports(
-      ITypeBinding binding, Collection<Import> imports, TranslationEnvironment env) {
-    if (binding == null || binding.isPrimitive() || BindingUtil.isLambda(binding)) {
-      return;
+      TypeMirror type, Collection<Import> imports, TranslationEnvironment env) {
+    if (type instanceof PointerType) {
+      addImports(((PointerType) type).getPointeeType(), imports, env);
     }
-    if (binding instanceof PointerTypeBinding) {
-      addImports(((PointerTypeBinding) binding).getPointeeType(), imports, env);
-      return;
-    }
-    for (ITypeBinding bound : BindingUtil.getTypeBounds(binding)) {
-      bound = env.types().mapType(bound);
-      if (!FOUNDATION_TYPES.contains(bound.getName())) {
-        imports.add(new Import(bound, env.nameTable()));
+    for (TypeElement objcClass : env.typeUtil().getObjcUpperBounds(type)) {
+      Import newImport = new Import(objcClass, env.nameTable(), env.options());
+      // An empty header indicates a Foundation type that doesn't require an import or forward
+      // declaration.
+      if (!newImport.getImportFileName().isEmpty()) {
+        imports.add(newImport);
       }
     }
   }

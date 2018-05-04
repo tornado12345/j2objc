@@ -76,11 +76,11 @@
 - (NSString *)description {
   NSString *mods = JavaLangReflectModifier_toStringWithInt_(metadata_->modifiers);
   if ([mods length] > 0) {
-    return [NSString stringWithFormat:@"%@ %@ %@.%@", mods, [self getType],
+    return [NSString stringWithFormat:@"%@ %@ %@.%@", mods, [[self getType] getName],
             [[self getDeclaringClass] getName], [self getName]];
   }
-  return [NSString stringWithFormat:@"%@ %@.%@", [self getType], [[self getDeclaringClass] getName],
-          [self getName]];
+  return [NSString stringWithFormat:@"%@ %@.%@", [[self getType] getName],
+          [[self getDeclaringClass] getName], [self getName]];
 }
 
 static jboolean IsStatic(JavaLangReflectField *field) {
@@ -110,7 +110,7 @@ static void ReadRawValue(
       *rawValue = field->metadata_->constantValue;
     }
   } else {
-    nil_chk(object);
+    (void)nil_chk(object);
     if (![field->declaringClass_ isInstance:object]) {
       @throw create_JavaLangIllegalArgumentException_initWithNSString_(@"field type mismatch");
     }
@@ -149,7 +149,7 @@ static void SetWithRawValue(
     }
     [type __writeRawValue:rawValue toAddress:field->ptrTable_[field->metadata_->staticRefIdx]];
   } else {
-    nil_chk(object);
+    (void)nil_chk(object);
     if (IsFinal(field) && !field->accessible_) {
       @throw create_JavaLangIllegalAccessException_initWithNSString_(@"Cannot set final field");
     }
@@ -343,8 +343,12 @@ static void SetWithRawValue(
   return [IOSObjectArray arrayWithLength:0 type:JavaLangAnnotationAnnotation_class_()];
 }
 
-- (int)unsafeOffset {
-  return (int) ivar_getOffset(ivar_);
+- (jlong)unsafeOffset {
+  if (IsStatic(self)) {
+    return (jlong)JrePtrAtIndex(ptrTable_, metadata_->staticRefIdx);
+  } else {
+    return (jlong)ivar_getOffset(ivar_);
+  }
 }
 
 // isEqual and hash are uniquely identified by their class and field names.
@@ -362,6 +366,7 @@ static void SetWithRawValue(
 
 + (const J2ObjcClassInfo *)__metadata {
   static J2ObjcMethodInfo methods[] = {
+    { NULL, NULL, 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "I", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LIOSClass;", 0x1, -1, -1, -1, 0, -1, -1 },
@@ -390,39 +395,38 @@ static void SetWithRawValue(
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, NULL, 0x1, -1, -1, -1, -1, -1, -1 },
   };
   #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wobjc-multiple-method-names"
-  methods[0].selector = @selector(getName);
-  methods[1].selector = @selector(getModifiers);
-  methods[2].selector = @selector(getType);
-  methods[3].selector = @selector(getGenericType);
-  methods[4].selector = @selector(getDeclaringClass);
-  methods[5].selector = @selector(getWithId:);
-  methods[6].selector = @selector(getBooleanWithId:);
-  methods[7].selector = @selector(getByteWithId:);
-  methods[8].selector = @selector(getCharWithId:);
-  methods[9].selector = @selector(getDoubleWithId:);
-  methods[10].selector = @selector(getFloatWithId:);
-  methods[11].selector = @selector(getIntWithId:);
-  methods[12].selector = @selector(getLongWithId:);
-  methods[13].selector = @selector(getShortWithId:);
-  methods[14].selector = @selector(setWithId:withId:);
-  methods[15].selector = @selector(setBooleanWithId:withBoolean:);
-  methods[16].selector = @selector(setByteWithId:withByte:);
-  methods[17].selector = @selector(setCharWithId:withChar:);
-  methods[18].selector = @selector(setDoubleWithId:withDouble:);
-  methods[19].selector = @selector(setFloatWithId:withFloat:);
-  methods[20].selector = @selector(setIntWithId:withInt:);
-  methods[21].selector = @selector(setLongWithId:withLong:);
-  methods[22].selector = @selector(setShortWithId:withShort:);
-  methods[23].selector = @selector(getAnnotationWithIOSClass:);
-  methods[24].selector = @selector(getDeclaredAnnotations);
-  methods[25].selector = @selector(isSynthetic);
-  methods[26].selector = @selector(isEnumConstant);
-  methods[27].selector = @selector(toGenericString);
-  methods[28].selector = @selector(init);
+  methods[0].selector = @selector(init);
+  methods[1].selector = @selector(getName);
+  methods[2].selector = @selector(getModifiers);
+  methods[3].selector = @selector(getType);
+  methods[4].selector = @selector(getGenericType);
+  methods[5].selector = @selector(getDeclaringClass);
+  methods[6].selector = @selector(getWithId:);
+  methods[7].selector = @selector(getBooleanWithId:);
+  methods[8].selector = @selector(getByteWithId:);
+  methods[9].selector = @selector(getCharWithId:);
+  methods[10].selector = @selector(getDoubleWithId:);
+  methods[11].selector = @selector(getFloatWithId:);
+  methods[12].selector = @selector(getIntWithId:);
+  methods[13].selector = @selector(getLongWithId:);
+  methods[14].selector = @selector(getShortWithId:);
+  methods[15].selector = @selector(setWithId:withId:);
+  methods[16].selector = @selector(setBooleanWithId:withBoolean:);
+  methods[17].selector = @selector(setByteWithId:withByte:);
+  methods[18].selector = @selector(setCharWithId:withChar:);
+  methods[19].selector = @selector(setDoubleWithId:withDouble:);
+  methods[20].selector = @selector(setFloatWithId:withFloat:);
+  methods[21].selector = @selector(setIntWithId:withInt:);
+  methods[22].selector = @selector(setLongWithId:withLong:);
+  methods[23].selector = @selector(setShortWithId:withShort:);
+  methods[24].selector = @selector(getAnnotationWithIOSClass:);
+  methods[25].selector = @selector(getDeclaredAnnotations);
+  methods[26].selector = @selector(isSynthetic);
+  methods[27].selector = @selector(isEnumConstant);
+  methods[28].selector = @selector(toGenericString);
   #pragma clang diagnostic pop
   static const void *ptrTable[] = {
     "()Ljava/lang/Class<*>;", "get", "LNSObject;",

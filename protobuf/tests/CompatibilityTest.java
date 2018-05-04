@@ -12,7 +12,11 @@
  * limitations under the License.
  */
 
-import com.google.j2objc.PrefixDummy;
+import abc_def.gHiJkL.Foo2bar;
+import abc_def.gHiJkL.Foo_bar;
+import abc_def.gHiJkL.fooBar;
+import com.google.j2objc.test.PrefixDummy;
+import com.google.protobuf.AbstractMessage;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Descriptors.Descriptor;
 import com.google.protobuf.Descriptors.EnumDescriptor;
@@ -21,20 +25,24 @@ import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.protobuf.Descriptors.FieldDescriptor.Type;
 import com.google.protobuf.ExtensionRegistry;
 import com.google.protobuf.ExtensionRegistryLite;
-import com.google.protobuf.GeneratedMessage;
-import com.google.protobuf.GeneratedMessage.ExtendableMessageOrBuilder;
 import com.google.protobuf.Internal;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.Message;
 import com.google.protobuf.MessageLite;
 import com.google.protobuf.ProtocolMessageEnum;
-
-import abc_def.gHiJkL.Foo2bar;
-import abc_def.gHiJkL.Foo_bar;
-import abc_def.gHiJkL.fooBar;
-
 import foo.bar.baz.PrefixDummy2;
-
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 import protos.EmptyFile;
 import protos.MsgWithDefaults;
 import protos.MsgWithDefaultsOrBuilder;
@@ -48,18 +56,6 @@ import protos.TypicalDataMessage;
 import protos.TypicalDataOrBuilder;
 import protos.TypicalDataSet;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-
 /**
  * Tests for various protocol buffer features to ensure that the generated
  * objective-c wrappers and runtime are compatible where required.
@@ -67,21 +63,20 @@ import java.util.Map;
  */
 public class CompatibilityTest extends ProtobufTest {
 
-  private static InputStream getResourceStream(String path) throws FileNotFoundException {
-    InputStream result = ClassLoader.getSystemResourceAsStream(path);
-    if (result == null) {
-      throw new FileNotFoundException(path);
-    }
-    return result;
-  }
-
+  // Fetch test resource from application root or relative path, depending on build.
   private static InputStream getTestData(String name) throws FileNotFoundException {
-    String osName = System.getProperty("os.name");
-    if (osName.contains("iPhone")) {
-      return getResourceStream(name);
-    } else {
-      return new FileInputStream(new File("testdata/" + name));
+    // For iOS the test data might be available at root in the bundle.
+    InputStream resource = ClassLoader.getSystemResourceAsStream(name);
+    if (resource != null) {
+      return resource;
     }
+    // For Java the test data is added as a resource in the jar.
+    resource = ClassLoader.getSystemResourceAsStream("testdata/" + name);
+    if (resource != null) {
+      return resource;
+    }
+    // For macos, the files are not available in the bundle.
+    return new FileInputStream(new File("testdata/" + name));
   }
 
   private static byte[] readStream(InputStream in) throws IOException {
@@ -286,7 +281,6 @@ public class CompatibilityTest extends ProtobufTest {
     checkMergeAndParse(
         TypicalData.newBuilder().mergeFrom(new ByteArrayInputStream(rawData)).build(), false);
     checkMergeAndParse(TypicalData.parseFrom(new ByteArrayInputStream(rawData)), false);
-
   }
 
   public void testMergeAndParseDelimitedFromInputStream() throws Exception {
@@ -349,6 +343,27 @@ public class CompatibilityTest extends ProtobufTest {
     byte[] bytes = out.toByteArray();
     byte[] expected = new byte[]{ 0x09, 0x08, 0x07, 0x60, 0x01, 0x7A, 0x03, 0x66, 0x6F, 0x6F };
     checkBytes(expected, bytes);
+  }
+
+  public void testIOExceptionFromOutputStream() throws Exception {
+    // The issue being tested requires a proto that is larger than the CodedOutputStream buffer
+    // size.
+    TypicalData data;
+    try (InputStream in = getTestData("largeproto")) {
+      data = TypicalData.parseDelimitedFrom(in);
+    }
+    OutputStream out = new OutputStream() {
+      @Override
+      public void write(int b) throws IOException {
+        throw new IOException("test exception");
+      }
+    };
+    try {
+      data.writeTo(out);
+      fail("Expected IOException to be thrown.");
+    } catch (IOException e) {
+      // Expected
+    }
   }
 
   public void testMergeFromInvalidProtocolBufferException() throws Exception {
@@ -539,16 +554,6 @@ public class CompatibilityTest extends ProtobufTest {
     assertEquals(3, TypicalData.EnumType.VALUE3.getNumber());
     assertEquals(4, TypicalData.EnumType.VALUE4.getNumber());
     assertEquals(9, TypicalData.EnumType.VALUE9.getNumber());
-  }
-
-
-  public void testEnumValueOf() throws Exception {
-    assertEquals(TypicalData.EnumType.VALUE1, TypicalData.EnumType.valueOf(1));
-    assertEquals(TypicalData.EnumType.VALUE2, TypicalData.EnumType.valueOf(2));
-    assertEquals(TypicalData.EnumType.VALUE3, TypicalData.EnumType.valueOf(3));
-    assertEquals(TypicalData.EnumType.VALUE4, TypicalData.EnumType.valueOf(4));
-    assertEquals(TypicalData.EnumType.VALUE9, TypicalData.EnumType.valueOf(9));
-    assertNull(TypicalData.EnumType.valueOf(5));
   }
 
   public void testEnumValueOfWithString() throws Exception {
@@ -873,12 +878,12 @@ public class CompatibilityTest extends ProtobufTest {
   }
 
   public void testGetSerializedSize() throws Exception {
-    GeneratedMessage data = TypicalData.newBuilder().setMyInt(1).build();
+    AbstractMessage data = TypicalData.newBuilder().setMyInt(1).build();
     assertEquals(2, data.getSerializedSize());
   }
 
   public void testGetAllFields() throws Exception {
-    GeneratedMessage data = TypicalData.newBuilder()
+    AbstractMessage data = TypicalData.newBuilder()
         .setMyInt(1)
         .addRepeatedInt32(2)
         .setExtension(Typical.myExtension, TypicalDataMessage.getDefaultInstance())
@@ -1307,11 +1312,11 @@ public class CompatibilityTest extends ProtobufTest {
   }
 
   public void testByteStringSubstring() throws Exception {
-    ByteString bs1 = ByteString.copyFrom("abcdefghijklmnop".getBytes());
+    ByteString bs1 = ByteString.copyFrom("abcdefghijklmnop".getBytes("UTF-8"));
     ByteString bs2 = bs1.substring(1, 15);
-    assertEquals("bcdefghijklmno", new String(bs2.toByteArray()));
+    assertEquals("bcdefghijklmno", new String(bs2.toByteArray(), "UTF-8"));
     ByteString bs3 = bs1.substring(12);
-    assertEquals("mnop", new String(bs3.toByteArray()));
+    assertEquals("mnop", new String(bs3.toByteArray(), "UTF-8"));
     ByteString bs4 = bs1.substring(11, 11);
     assertTrue(bs4.isEmpty());
     expectSubstringIndexOutOfBounds(bs1, -1, 1);
@@ -1319,18 +1324,22 @@ public class CompatibilityTest extends ProtobufTest {
     expectSubstringIndexOutOfBounds(bs1, 7, 6);
   }
 
-  public void testExtendableMessageOrBuilder() throws Exception {
-    TypicalData.Builder builder = TypicalData.newBuilder().setMyInt(42);
-    TypicalData data = builder.build();
-    Object o = builder;
-    ExtendableMessageOrBuilder emob = (ExtendableMessageOrBuilder) o;
-    o = data;
-    emob = (ExtendableMessageOrBuilder) o;
-  }
-
   public void testInternalEnumLite() throws Exception {
     Object value = TypicalData.EnumType.VALUE9;
     assertTrue(value instanceof Internal.EnumLite);
     assertEquals(9, ((Internal.EnumLite) value).getNumber());
+  }
+
+  public void testEmptyString() throws Exception {
+    byte[] rawData = asBytes(new int[]{ 0x7A, 0x00 });
+    TypicalData data = TypicalData.parseFrom(new ByteArrayInputStream(rawData));
+    assertEquals("", data.getMyString());
+  }
+
+  public void testInvalidUtf8Bytes() throws Exception {
+    byte[] rawData = asBytes(new int[]{
+        0x7A, 0x0A, 0x61, 0x62, 0x63, 0xFF, 0xD8, 0xFF, 0xE0, 0x64, 0x65, 0x66 });
+    TypicalData data = TypicalData.parseFrom(new ByteArrayInputStream(rawData));
+    assertEquals("abc\ufffd\ufffd\ufffd\ufffddef", data.getMyString());
   }
 }

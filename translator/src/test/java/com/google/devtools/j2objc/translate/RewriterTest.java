@@ -243,19 +243,23 @@ public class RewriterTest extends GenerationTest {
     String translation = translateSourceFile(
         "class Test { int i1, i2[], i3[][], i4[][][], i5[][], i6; }", "Test", "Test.h");
     assertTranslatedLines(translation,
-        "int i1_, i6_;",
+        "jint i1_;",
         "IOSIntArray *i2_;",
-        "IOSObjectArray *i3_, *i5_;",
-        "IOSObjectArray *i4_;");
+        "IOSObjectArray *i3_;",
+        "IOSObjectArray *i4_;",
+        "IOSObjectArray *i5_;",
+        "jint i6_;");
   }
 
   public void testExtraDimensionsInVariableDeclarationStatement() throws IOException {
     String translation = translateSourceFile(
         "class Test { void test() { char c1[][], c2[], c3, c4, c5[][]; } }", "Test", "Test.m");
     assertTranslatedLines(translation,
-        "IOSObjectArray *c1, *c5;",
+        "IOSObjectArray *c1;",
         "IOSCharArray *c2;",
-        "jchar c3, c4;");
+        "jchar c3;",
+        "jchar c4;",
+        "IOSObjectArray *c5;");
   }
 
   // Objective-C requires that && tests be surrounded by parens when mixed with || tests.
@@ -325,5 +329,145 @@ public class RewriterTest extends GenerationTest {
         + "  public static void initialize() {}}",
         "Test", "Test.m");
     assertTranslation(translation, "+ (void)initialize__ {");
+  }
+
+  // Verify minimal try-with-resources translation.
+  public void testTryWithResourceNoCatchOrFinally() throws IOException {
+    String translation = translateSourceFile(
+        "import java.io.*; public class Test { String test(String path) throws IOException { "
+        + "  try (BufferedReader br = new BufferedReader(new FileReader(path))) {"
+        + "    return br.readLine(); } }}",
+        "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
+        + "create_JavaIoFileReader_initWithNSString_(path));",
+        "JavaLangThrowable *__primaryException1 = nil;",
+        "@try {",
+        "  return [br readLine];",
+        "}",
+        "@catch (JavaLangThrowable *e) {",
+        "  __primaryException1 = e;",
+        "  @throw e;",
+        "}",
+        "@finally {",
+        "  if (br != nil) {",
+        "    if (__primaryException1 != nil) {",
+        "      @try {",
+        "        [br close];",
+        "      }",
+        "      @catch (JavaLangThrowable *e) {",
+        "        [__primaryException1 addSuppressedWithJavaLangThrowable:e];",
+        "      }",
+        "    }",
+        "    else {",
+        "      [br close];",
+        "    }",
+        "  }",
+        "}");
+  }
+
+  // Verify try-with-resources translation with multiple resources.
+  public void testTryWithMultipleResourceNoCatchOrFinally() throws IOException {
+    String translation = translateSourceFile(
+        "import java.io.*; public class Test { String test(String path) throws IOException { "
+        + "  try (BufferedReader br = new BufferedReader(new FileReader(path));"
+        + "       BufferedReader br2 = new BufferedReader(new FileReader(path))) {"
+        + "    return br.readLine(); } }}",
+        "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
+            + "create_JavaIoFileReader_initWithNSString_(path));",
+        "JavaLangThrowable *__primaryException2 = nil;",
+        "@try {",
+        " JavaIoBufferedReader *br2 = create_JavaIoBufferedReader_initWithJavaIoReader_("
+            + "create_JavaIoFileReader_initWithNSString_(path));",
+        " JavaLangThrowable *__primaryException1 = nil;",
+        " @try {",
+        "  return [br readLine];",
+        " }",
+        " @catch (JavaLangThrowable *e) {",
+        "  __primaryException1 = e;",
+        "  @throw e;",
+        " }",
+        " @finally {",
+        "  if (br2 != nil) {",
+        "    if (__primaryException1 != nil) {",
+        "      @try {",
+        "        [br2 close];",
+        "      }",
+        "      @catch (JavaLangThrowable *e) {",
+        "        [__primaryException1 addSuppressedWithJavaLangThrowable:e];",
+        "      }",
+        "    }",
+        "    else {",
+        "      [br2 close];",
+        "    }",
+        "  }",
+        " }",
+        "}",
+        "@catch (JavaLangThrowable *e) {",
+        " __primaryException2 = e;",
+        " @throw e;",
+        "}",
+        "@finally {",
+        " if (br != nil) {",
+        "  if (__primaryException2 != nil) {",
+        "   @try {",
+        "    [br close];",
+        "   }",
+        "   @catch (JavaLangThrowable *e) {",
+        "    [__primaryException2 addSuppressedWithJavaLangThrowable:e];",
+        "   }",
+        "  }",
+        "  else {",
+        "   [br close];",
+        "  }",
+        " }",
+        "}");
+  }
+
+  // Verify try-with-resources translation is inside of try block with catch clause outside.
+  public void testTryWithResourceAndCatch() throws IOException {
+    String translation = translateSourceFile(
+        "import java.io.*; public class Test { String test(String path) throws IOException { "
+        + "  try (BufferedReader br = new BufferedReader(new FileReader(path))) {"
+        + "    return br.readLine(); "
+        + "  } catch (IOException e) {"
+        + "    System.out.println(e);"
+        + "    throw e;"
+        + "  } }}",
+        "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "@try {",
+        " JavaIoBufferedReader *br = create_JavaIoBufferedReader_initWithJavaIoReader_("
+        + "create_JavaIoFileReader_initWithNSString_(path));",
+        " JavaLangThrowable *__primaryException1 = nil;",
+        " @try {",
+        "  return [br readLine];",
+        " }",
+        " @catch (JavaLangThrowable *e) {",
+        "  __primaryException1 = e;",
+        "  @throw e;",
+        " }",
+        " @finally {",
+        "  if (br != nil) {",
+        "   if (__primaryException1 != nil) {",
+        "    @try {",
+        "     [br close];",
+        "    }",
+        "    @catch (JavaLangThrowable *e) {",
+        "     [__primaryException1 addSuppressedWithJavaLangThrowable:e];",
+        "    }",
+        "   }",
+        "   else {",
+        "    [br close];",
+        "   }",
+        "  }",
+        " }",
+        "}",
+        "@catch (JavaIoIOException *e) {",
+        " [((JavaIoPrintStream *) nil_chk(JreLoadStatic(JavaLangSystem, out))) printlnWithId:e];",
+        " @throw e;",
+        "}");
   }
 }

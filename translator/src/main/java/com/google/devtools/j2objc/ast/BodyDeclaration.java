@@ -14,11 +14,9 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.TreeConverter;
 import com.google.devtools.j2objc.util.ElementUtil;
 import java.util.List;
 import javax.lang.model.element.Element;
-import org.eclipse.jdt.core.dom.IBinding;
 
 /**
  * Base class for all declarations that may appear in the body of a type declaration.
@@ -31,21 +29,7 @@ public abstract class BodyDeclaration extends TreeNode {
   protected ChildLink<Javadoc> javadoc = ChildLink.create(Javadoc.class, this);
   protected ChildList<Annotation> annotations = ChildList.create(Annotation.class, this);
 
-  BodyDeclaration() {
-    super();
-  }
-
-  // TODO(tball): remove when all subclasses are converted.
-  BodyDeclaration(org.eclipse.jdt.core.dom.BodyDeclaration jdtNode) {
-    super(jdtNode);
-    modifiers = jdtNode.getModifiers();
-    javadoc.set((Javadoc) TreeConverter.convert(jdtNode.getJavadoc()));
-    for (Object modifier : jdtNode.modifiers()) {
-      if (modifier instanceof org.eclipse.jdt.core.dom.Annotation) {
-        annotations.add((Annotation) TreeConverter.convert(modifier));
-      }
-    }
-  }
+  BodyDeclaration() {}
 
   public BodyDeclaration(BodyDeclaration other) {
     super(other);
@@ -53,11 +37,6 @@ public abstract class BodyDeclaration extends TreeNode {
     hasPrivateDeclaration = other.hasPrivateDeclaration();
     javadoc.copyFrom(other.getJavadoc());
     annotations.copyFrom(other.getAnnotations());
-  }
-
-  // TODO(tball): remove when all subclasses are converted.
-  public BodyDeclaration(IBinding binding) {
-    modifiers = binding.getModifiers();
   }
 
   public BodyDeclaration(Element element) {

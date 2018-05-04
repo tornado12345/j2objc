@@ -15,7 +15,7 @@
 package com.google.devtools.j2objc.ast;
 
 import com.google.common.base.Preconditions;
-import com.google.devtools.j2objc.types.Types;
+import com.google.devtools.j2objc.util.TypeUtil;
 import javax.lang.model.type.TypeMirror;
 
 /**
@@ -24,27 +24,25 @@ import javax.lang.model.type.TypeMirror;
 public class NumberLiteral extends Expression {
 
   private String token = null;
-  private Number value = null;
   private final TypeMirror typeMirror;
 
   public NumberLiteral(NumberLiteral other) {
     super(other);
     token = other.getToken();
-    value = other.getValue();
     typeMirror = other.getTypeMirror();
   }
 
-  public NumberLiteral(Number value, Types typeEnv) {
-    this(value, typeForNumber(value, typeEnv));
+  public NumberLiteral(Number value, TypeUtil typeUtil) {
+    this(value, typeForNumber(value, typeUtil));
   }
 
   public NumberLiteral(Number value, TypeMirror typeMirror) {
-    this.value = value;
+    this.constantValue = value;
     this.typeMirror = typeMirror;
   }
 
-  public static NumberLiteral newIntLiteral(Integer i, Types typeEnv) {
-    return new NumberLiteral(i, typeEnv);
+  public static NumberLiteral newIntLiteral(Integer i, TypeUtil typeUtil) {
+    return new NumberLiteral(i, typeUtil);
   }
 
   @Override
@@ -67,12 +65,18 @@ public class NumberLiteral extends Expression {
   }
 
   public Number getValue() {
-    return value;
+    return (Number) constantValue;
   }
 
   public NumberLiteral setValue(Number newValue) {
-    value = newValue;
+    constantValue = newValue;
     return this;
+  }
+
+  @Override
+  public NumberLiteral setConstantValue(Object value) {
+    assert value == null || value instanceof Number;
+    return (NumberLiteral) super.setConstantValue(value);
   }
 
   @Override
@@ -89,22 +93,22 @@ public class NumberLiteral extends Expression {
   @Override
   public void validateInner() {
     super.validateInner();
-    Preconditions.checkNotNull(value);
+    Preconditions.checkNotNull(constantValue);
   }
 
-  private static TypeMirror typeForNumber(Number value, Types typeEnv) {
+  private static TypeMirror typeForNumber(Number value, TypeUtil typeUtil) {
     if (value instanceof Byte) {
-      return typeEnv.resolveJavaTypeMirror("byte");
+      return typeUtil.getByte();
     } else if (value instanceof Short) {
-      return typeEnv.resolveJavaTypeMirror("short");
+      return typeUtil.getShort();
     } else if (value instanceof Integer) {
-      return typeEnv.resolveJavaTypeMirror("int");
+      return typeUtil.getInt();
     } else if (value instanceof Long) {
-      return typeEnv.resolveJavaTypeMirror("long");
+      return typeUtil.getLong();
     } else if (value instanceof Float) {
-      return typeEnv.resolveJavaTypeMirror("float");
+      return typeUtil.getFloat();
     } else if (value instanceof Double) {
-      return typeEnv.resolveJavaTypeMirror("double");
+      return typeUtil.getDouble();
     } else {
       throw new AssertionError("Invalid number literal type: " + value.getClass().getName());
     }

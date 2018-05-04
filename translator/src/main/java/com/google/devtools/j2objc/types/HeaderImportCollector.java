@@ -34,8 +34,9 @@ import com.google.devtools.j2objc.util.TranslationUtil;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Collects the set of imports needed to resolve type references in a header.
@@ -90,26 +91,28 @@ public class HeaderImportCollector extends UnitTreeVisitor {
 
   private void addForwardDecl(Type type) {
     if (type != null) {
-      addForwardDecl(type.getTypeBinding());
+      addForwardDecl(type.getTypeMirror());
     }
   }
 
-  private void addForwardDecl(ITypeBinding type) {
+  private void addForwardDecl(TypeMirror type) {
     forwardDecls.addAll(Sets.difference(Import.getImports(type, unit.getEnv()), declaredTypes));
   }
 
-  private void addSuperType(ITypeBinding type) {
-    Import.addImports(type, superTypes, unit.getEnv());
+  private void addSuperType(TypeElement type) {
+    if (type != null) {
+      Import.addImports(type.asType(), superTypes, unit.getEnv());
+    }
   }
 
-  private void addDeclaredType(ITypeBinding type) {
-    Import.addImports(type, declaredTypes, unit.getEnv());
+  private void addDeclaredType(TypeElement type) {
+    Import.addImports(type.asType(), declaredTypes, unit.getEnv());
   }
 
   @Override
   public boolean visit(AnnotationTypeMemberDeclaration node) {
     if (filter.include(node)) {
-      addForwardDecl(node.getType());
+      addForwardDecl(node.getTypeMirror());
     }
     return false;
   }
@@ -117,7 +120,7 @@ public class HeaderImportCollector extends UnitTreeVisitor {
   @Override
   public boolean visit(FieldDeclaration node) {
     if (filter.include(node)) {
-      addForwardDecl(node.getType());
+      addForwardDecl(node.getTypeMirror());
     }
     return false;
   }
@@ -127,7 +130,7 @@ public class HeaderImportCollector extends UnitTreeVisitor {
     if (filter.include(node)) {
       addForwardDecl(node.getReturnType());
       for (SingleVariableDeclaration param : node.getParameters()) {
-        addForwardDecl(param.getVariableBinding().getType());
+        addForwardDecl(param.getVariableElement().asType());
       }
     }
     return false;
@@ -136,10 +139,9 @@ public class HeaderImportCollector extends UnitTreeVisitor {
   @Override
   public boolean visit(MethodDeclaration node) {
     if (filter.include(node)) {
-      addForwardDecl(node.getReturnType());
-      IMethodBinding binding = node.getMethodBinding();
-      for (ITypeBinding paramType : binding.getParameterTypes()) {
-        addForwardDecl(paramType);
+      addForwardDecl(node.getReturnTypeMirror());
+      for (VariableElement param : node.getExecutableElement().getParameters()) {
+        addForwardDecl(param.asType());
       }
     }
     return false;
@@ -147,10 +149,9 @@ public class HeaderImportCollector extends UnitTreeVisitor {
 
   private boolean visitTypeDeclaration(AbstractTypeDeclaration node) {
     if (filter.include(node)) {
-      ITypeBinding binding = node.getTypeBinding();
-      addDeclaredType(binding);
+      addDeclaredType(node.getTypeElement());
       addSuperType(TranslationUtil.getSuperType(node));
-      for (ITypeBinding interfaze : TranslationUtil.getInterfaceTypes(node)) {
+      for (TypeElement interfaze : TranslationUtil.getInterfaceTypes(node)) {
         addSuperType(interfaze);
       }
     }

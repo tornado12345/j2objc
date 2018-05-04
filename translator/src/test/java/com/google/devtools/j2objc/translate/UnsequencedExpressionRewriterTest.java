@@ -15,7 +15,6 @@
 package com.google.devtools.j2objc.translate;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 
 import java.io.IOException;
 
@@ -29,7 +28,7 @@ public class UnsequencedExpressionRewriterTest extends GenerationTest {
   @Override
   protected void setUp() throws IOException {
     super.setUp();
-    Options.enableExtractUnsequencedModifications();
+    options.enableExtractUnsequencedModifications();
   }
 
   public void testUnsequencedPrefixExpression() throws IOException {
@@ -124,9 +123,11 @@ public class UnsequencedExpressionRewriterTest extends GenerationTest {
     assertTranslatedLines(translation,
         "jint i = 0;",
         "jint unseq$1 = i++;",
-        "jint j = unseq$1 + i, k = j;",
+        "jint j = unseq$1 + i;",
+        "jint k = j;",
         "jint unseq$2 = --k;",
-        "jint l = unseq$2 - k, m = 1;");
+        "jint l = unseq$2 - k;",
+        "jint m = 1;");
   }
 
   public void testAssertStatement() throws IOException {
@@ -137,7 +138,7 @@ public class UnsequencedExpressionRewriterTest extends GenerationTest {
         "jint unseq$1 = i++;",
         "jboolean unseq$2 = unseq$1 + i++ == 0;",
         "jint unseq$3 = i++;",
-        "JreAssert((unseq$2), (JreStrcat(\"$II\", @\"foo\", unseq$3, i++)));");
+        "JreAssert(unseq$2, JreStrcat(\"$II\", @\"foo\", unseq$3, i++));");
   }
 
   public void testForInitStatements() throws IOException {
@@ -146,7 +147,9 @@ public class UnsequencedExpressionRewriterTest extends GenerationTest {
         + "for (i = i++ + i++, j = i++ + i++, k = i++ + i++;;) { } } }",
         "Test", "Test.m");
     assertTranslatedLines(translation,
-        "jint i = 0, j = 0, k = 0;",
+        "jint i = 0;",
+        "jint j = 0;",
+        "jint k = 0;",
         "jint unseq$1 = i++;",
         "jint unseq$2 = i++;",
         "i = unseq$1 + unseq$2;",

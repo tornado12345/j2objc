@@ -171,11 +171,12 @@ public class InitializationNormalizerTest extends GenerationTest {
   }
 
   public void testStringConcatWithInvalidCppCharacters() throws IOException {
-    String source = "class Test { static final String foo = \"hello\" + \"\\udfff\"; }";
+    // Include a 1 between the strings so javac's parser doesn't combine them.
+    String source = "class Test { static final String foo = \"hello\" + 1 + \"\\udfff\"; }";
     String translation = translateSourceFile(source, "Test", "Test.m");
     assertTranslation(translation, "NSString *Test_foo;");
     assertTranslation(translation,
-        "JreStrongAssign(&Test_foo, JreStrcat(\"$$\", @\"hello\", "
+        "JreStrongAssign(&Test_foo, JreStrcat(\"$$\", @\"hello1\", "
         + "[NSString stringWithCharacters:(jchar[]) { (int) 0xdfff } length:1]));");
   }
 
@@ -243,5 +244,33 @@ public class InitializationNormalizerTest extends GenerationTest {
         "class Test { private static final int A = 1; private static final int B = 2; "
         + "private static final int C = A < B ? A : B; }", "Test", "Test.m");
     assertTranslation(translation, "#define Test_C 1");
+  }
+
+  // Verify that code in a double-brace is added to initialize method.
+  public void testDoubleBraceInitialization() throws IOException {
+    String translation = translateSourceFile(
+        "import java.util.*; class Test { static final Map<String, String> test = "
+        + "new HashMap<String, String>() {{ put(\"123\", \"123\"); }}; }", "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "void Test_1_init(Test_1 *self) {",
+        "JavaUtilHashMap_init(self);",
+        "{",
+        "[self putWithId:@\"123\" withId:@\"123\"];",
+        "}",
+        "}");
+  }
+
+  public void testConstantStringInitializationOrder() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { private static final int CODE_POINT = getCodePoint(); "
+        + "private static final String FOO = \"\\uda6e\"; "
+        + "static int getCodePoint() { return FOO.codePointAt(0); } }", "Test", "Test.m");
+    assertTranslatedLines(translation,
+        "+ (void)initialize {",
+        "  if (self == [Test class]) {",
+        // Initialization of the constant FOO must come before initialization of non-constants.
+        "    JreStrongAssign(&Test_FOO, [NSString stringWithCharacters:(jchar[]) { "
+          + "(int) 0xda6e } length:1]);",
+        "    Test_CODE_POINT = Test_getCodePoint();");
   }
 }

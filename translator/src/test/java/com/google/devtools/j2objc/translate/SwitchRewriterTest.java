@@ -43,11 +43,14 @@ public class SwitchRewriterTest extends GenerationTest {
       + "private void log(int i) {}}",
       "A", "A.m");
     assertTranslation(translation, "jint j;");
-    assertTranslation(translation, "jint k, l;");
+    assertTranslation(translation, "jint k;");
+    assertTranslation(translation, "jint l;");
     assertTranslation(translation, "case 1:");
     assertTrue(translation.indexOf("jint j;") < translation.indexOf("case 1:"));
-    assertTrue(translation.indexOf("jint k, l;") < translation.indexOf("case 1:"));
-    assertTrue(translation.indexOf("jint j;") < translation.indexOf("jint k, l;"));
+    assertTrue(translation.indexOf("jint k;") < translation.indexOf("case 1:"));
+    assertTrue(translation.indexOf("jint l;") < translation.indexOf("case 1:"));
+    assertTrue(translation.indexOf("jint j;") < translation.indexOf("jint k;"));
+    assertTrue(translation.indexOf("jint k;") < translation.indexOf("jint l;"));
     assertTranslation(translation, "j = i * 2;");
     assertTranslation(translation, "k = i;");
     assertTranslation(translation, "l = 42;");
@@ -62,15 +65,17 @@ public class SwitchRewriterTest extends GenerationTest {
         + "case 3: log(i); int k = i, l = 42; break; }}"
         + "private void log(int i) {}}");
     TypeDeclaration testType = (TypeDeclaration) unit.getTypes().get(0);
-    MethodDeclaration method = TreeUtil.getMethodDeclarationsList(testType).get(0);
+    // First MethodDeclaration is the implicit default constructor.
+    MethodDeclaration method = TreeUtil.getMethodDeclarationsList(testType).get(1);
     List<Statement> stmts = method.getBody().getStatements();
     assertEquals(1, stmts.size());
     Block block = (Block) stmts.get(0);
     stmts = block.getStatements();
-    assertEquals(3, stmts.size());
+    assertEquals(4, stmts.size());
     assertTrue(stmts.get(0) instanceof VariableDeclarationStatement);
     assertTrue(stmts.get(1) instanceof VariableDeclarationStatement);
-    assertTrue(stmts.get(2) instanceof SwitchStatement);
+    assertTrue(stmts.get(2) instanceof VariableDeclarationStatement);
+    assertTrue(stmts.get(3) instanceof SwitchStatement);
   }
 
   public void testMultipleSwitchVariables() throws IOException {
@@ -111,6 +116,9 @@ public class SwitchRewriterTest extends GenerationTest {
 
   // Verify Java 7's switch statements with strings.
   public void testStringSwitchStatement() throws IOException {
+    addSourceFile("class Foo { static final String TEST = \"test1\"; }", "Foo.java");
+    addSourceFile("interface Bar { String TEST = \"test2\"; }", "Bar.java");
+    addSourcesToSourcepaths();
     String translation = translateSourceFile(
         "public class Test { "
         + "static final String constant = \"mumble\";"
@@ -119,17 +127,24 @@ public class SwitchRewriterTest extends GenerationTest {
         + "    case \"foo\": return 42;"
         + "    case \"bar\": return 666;"
         + "    case constant: return -1;"
+        + "    case Foo.TEST: return -2;"
+        + "    case Bar.TEST: return -3;"
         + "    default: return -1;"
         + "  }}}",
         "Test", "Test.m");
     assertTranslatedLines(translation,
-        "switch (JreIndexOfStr(s, (id[]){ @\"foo\", @\"bar\", Test_constant }, 3)) {",
+        "switch (JreIndexOfStr(s, (id[]){ @\"foo\", "
+            + "@\"bar\", Test_constant, Foo_TEST, Bar_TEST }, 5)) {",
         "  case 0:",
         "  return 42;",
         "  case 1:",
         "  return 666;",
         "  case 2:",
         "  return -1;",
+        "  case 3:",
+        "  return -2;",
+        "  case 4:",
+        "  return -3;",
         "  default:",
         "  return -1;",
         "}");
@@ -163,5 +178,11 @@ public class SwitchRewriterTest extends GenerationTest {
         "  default:",
         "  return 'z';",
         "}");
+  }
+
+  public void testEmptySwitchStatement() throws IOException {
+    String translation = translateSourceFile(
+        "class Test { void test(int i) { switch (i) { } } }", "Test", "Test.m");
+    assertTranslatedLines(translation, "switch (i) {", "}");
   }
 }

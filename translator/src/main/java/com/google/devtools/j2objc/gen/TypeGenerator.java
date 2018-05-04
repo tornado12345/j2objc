@@ -29,23 +29,20 @@ import com.google.devtools.j2objc.ast.NativeDeclaration;
 import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
 import com.google.devtools.j2objc.ast.TreeNode;
 import com.google.devtools.j2objc.ast.TreeUtil;
-import com.google.devtools.j2objc.ast.TreeVisitor;
 import com.google.devtools.j2objc.ast.VariableDeclarationFragment;
-import com.google.devtools.j2objc.jdt.BindingConverter;
-import com.google.devtools.j2objc.types.Types;
-import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.TranslationEnvironment;
+import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.devtools.j2objc.util.UnicodeUtils;
+import java.lang.reflect.Modifier;
 import java.util.Iterator;
 import java.util.List;
-import javax.annotation.ParametersAreNonnullByDefault;
-import javax.lang.model.element.PackageElement;
-import org.eclipse.jdt.core.dom.IBinding;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
-import org.eclipse.jdt.core.dom.Modifier;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * The base class for TypeDeclarationGenerator and TypeImplementationGenerator,
@@ -57,31 +54,30 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
 
   // Convenient fields for use by subclasses.
   protected final AbstractTypeDeclaration typeNode;
-  protected final ITypeBinding typeBinding;
+  protected final TypeElement typeElement;
   protected final CompilationUnit compilationUnit;
   protected final TranslationEnvironment env;
-  protected final Types typeEnv;
+  protected final TypeUtil typeUtil;
   protected final NameTable nameTable;
   protected final String typeName;
-  protected final boolean hasNullabilityAnnotations;
+  protected final Options options;
+  protected final boolean parametersNonnullByDefault;
 
   private final List<BodyDeclaration> declarations;
-  private final boolean parametersNonnullByDefault;
 
   protected TypeGenerator(SourceBuilder builder, AbstractTypeDeclaration node) {
     super(builder);
     typeNode = node;
-    typeBinding = node.getTypeBinding();
+    typeElement = node.getTypeElement();
     compilationUnit = TreeUtil.getCompilationUnit(node);
     env = compilationUnit.getEnv();
-    typeEnv = env.types();
+    typeUtil = env.typeUtil();
     nameTable = env.nameTable();
-    typeName = nameTable.getFullName(typeBinding);
+    typeName = nameTable.getFullName(typeElement);
     declarations = filterDeclarations(node.getBodyDeclarations());
-    parametersNonnullByDefault = Options.nullability()
-        && areParametersNonnullByDefault();
-    hasNullabilityAnnotations = Options.nullability()
-        && (parametersNonnullByDefault || hasNullabilityAnnotations());
+    options = env.options();
+    parametersNonnullByDefault = options.nullability()
+        && env.elementUtil().areParametersNonnullByDefault(node.getTypeElement(), options);
   }
 
   protected boolean shouldPrintDeclaration(BodyDeclaration decl) {
@@ -104,7 +100,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
     public boolean apply(VariableDeclarationFragment frag) {
       // isGlobalVar includes non-static but final primitives, which are treated
       // like static fields in J2ObjC.
-      return BindingUtil.isGlobalVar(frag.getVariableBinding());
+      return ElementUtil.isGlobalVar(frag.getVariableElement());
     }
   };
 
@@ -112,7 +108,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
       new Predicate<VariableDeclarationFragment>() {
     @Override
     public boolean apply(VariableDeclarationFragment frag) {
-      return BindingUtil.isInstanceVar(frag.getVariableBinding());
+      return ElementUtil.isInstanceVar(frag.getVariableElement());
     }
   };
 
@@ -182,7 +178,7 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
   }
 
   protected boolean isInterfaceType() {
-    return typeBinding.isInterface();
+    return typeElement.getKind().isInterface();
   }
 
   protected Iterable<VariableDeclarationFragment> getInstanceFields() {
@@ -205,6 +201,11 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
         IS_STATIC_FIELD);
   }
 
+  protected Iterable<VariableDeclarationFragment> getAllFields() {
+    return TreeUtil.asFragments(
+        Iterables.filter(typeNode.getBodyDeclarations(), FieldDeclaration.class));
+  }
+
   protected Iterable<BodyDeclaration> getInnerDeclarations() {
     return Iterables.filter(declarations, IS_INNER_DECL);
   }
@@ -222,16 +223,21 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
   }
 
   private boolean hasStaticAccessorMethods() {
-    if (!Options.staticAccessorMethods()) {
+    if (!options.staticAccessorMethods()) {
       return false;
     }
     for (VariableDeclarationFragment fragment : TreeUtil.getAllFields(typeNode)) {
-      if (BindingUtil.isStatic(fragment.getVariableBinding())
+      if (ElementUtil.isStatic(fragment.getVariableElement())
           && !((FieldDeclaration) fragment.getParent()).hasPrivateDeclaration()) {
         return true;
       }
     }
     return false;
+  }
+
+  private boolean hasStaticMethods() {
+    return !Iterables.isEmpty(
+        Iterables.filter(ElementUtil.getMethods(typeElement), ElementUtil::isStatic));
   }
 
   protected boolean needsPublicCompanionClass() {
@@ -240,8 +246,8 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
     }
     return hasInitializeMethod()
         || hasStaticAccessorMethods()
-        || BindingUtil.isRuntimeAnnotation(typeBinding)
-        || BindingUtil.hasStaticInterfaceMethods(typeBinding);
+        || ElementUtil.isRuntimeAnnotation(typeElement)
+        || hasStaticMethods();
   }
 
   protected boolean needsCompanionClass() {
@@ -254,13 +260,13 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
   }
 
   protected boolean needsTypeLiteral() {
-    return !(BindingUtil.isPackageInfo(typeBinding) || typeBinding.isAnonymous()
-             || BindingUtil.isLambda(typeBinding));
+    return !(ElementUtil.isPackageInfo(typeElement) || ElementUtil.isAnonymous(typeElement)
+             || ElementUtil.isLambda(typeElement));
   }
 
-  protected String getDeclarationType(IVariableBinding var) {
-    ITypeBinding type = var.getType();
-    if (BindingUtil.isVolatile(var)) {
+  protected String getDeclarationType(VariableElement var) {
+    TypeMirror type = var.asType();
+    if (ElementUtil.isVolatile(var)) {
       return "volatile_" + NameTable.getPrimitiveObjCType(type);
     } else {
       return nameTable.getObjCType(type);
@@ -272,17 +278,17 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
    */
   protected String getMethodSignature(MethodDeclaration m) {
     StringBuilder sb = new StringBuilder();
-    IMethodBinding binding = m.getMethodBinding();
+    ExecutableElement element = m.getExecutableElement();
     char prefix = Modifier.isStatic(m.getModifiers()) ? '+' : '-';
-    String returnType = nameTable.getObjCType(binding.getReturnType());
-    String selector = nameTable.getMethodSelector(binding);
+    String returnType = nameTable.getObjCType(element.getReturnType());
+    String selector = nameTable.getMethodSelector(element);
     if (m.isConstructor()) {
       returnType = "instancetype";
     } else if (selector.equals("hash")) {
       // Explicitly test hashCode() because of NSObject's hash return value.
       returnType = "NSUInteger";
     }
-    sb.append(UnicodeUtils.format("%c (%s%s)", prefix, returnType, nullability(binding, false)));
+    sb.append(UnicodeUtils.format("%c (%s%s)", prefix, returnType, nullability(element)));
 
     List<SingleVariableDeclaration> params = m.getParameters();
     String[] selParts = selector.split(":");
@@ -298,9 +304,9 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
           sb.append('\n');
           sb.append(pad(baseLength - selParts[i].length()));
         }
-        IVariableBinding var = params.get(i).getVariableBinding();
-        String typeName = nameTable.getObjCType(var.getType());
-        sb.append(UnicodeUtils.format("%s:(%s%s)%s", selParts[i], typeName, nullability(var, true),
+        VariableElement var = params.get(i).getVariableElement();
+        String typeName = nameTable.getObjCType(var.asType());
+        sb.append(UnicodeUtils.format("%s:(%s%s)%s", selParts[i], typeName, nullability(var),
             nameTable.getVariableShortName(var)));
       }
     }
@@ -312,68 +318,35 @@ public abstract class TypeGenerator extends AbstractSourceGenerator {
    * Returns an Objective-C nullability attribute string if there is a matching
    * JSR305 annotation, or an empty string.
    */
-  private String nullability(IBinding binding, boolean isParameter) {
-    if (Options.nullability()) {
-      if (BindingUtil.hasNullableAnnotation(binding)) {
+  private String nullability(Element element) {
+    if (options.nullability()) {
+      if (ElementUtil.hasNullableAnnotation(element)) {
         return " __nullable";
       }
-      if (BindingUtil.hasNonnullAnnotation(binding)) {
-        return " __nonnull";
-      }
-      if (isParameter && !((IVariableBinding) binding).getType().isPrimitive()
-          && (parametersNonnullByDefault || BindingUtil.hasNonnullAnnotation(binding))) {
+      if (ElementUtil.isNonnull(element, parametersNonnullByDefault)) {
         return " __nonnull";
       }
     }
     return "";
   }
 
-  private boolean areParametersNonnullByDefault() {
-    if (BindingUtil.hasAnnotation(typeBinding, ParametersAreNonnullByDefault.class)) {
-      return true;
-    }
-    PackageElement pkg = env.elementUtil().getPackage(BindingConverter.getElement(typeBinding));
-    String pkgName = pkg.getQualifiedName().toString();
-    return Options.getPackageInfoLookup().hasParametersAreNonnullByDefault(pkgName);
-  }
-
-  private boolean hasNullabilityAnnotations() {
-    final boolean[] hasAnnotation = new boolean[1];
-    typeNode.accept(new TreeVisitor() {
-      @Override
-      public void endVisit(MethodDeclaration node) {
-        IMethodBinding method = node.getMethodBinding();
-        if (BindingUtil.hasNullableAnnotation(method)
-            || BindingUtil.hasNonnullAnnotation(method)) {
-          hasAnnotation[0] = true;
-        } else {
-          for (SingleVariableDeclaration param : node.getParameters()) {
-            IVariableBinding paramBinding = param.getVariableBinding();
-            if (BindingUtil.hasNullableAnnotation(paramBinding)
-                || BindingUtil.hasNonnullAnnotation(paramBinding)) {
-              hasAnnotation[0] = true;
-              break;
-            }
-          }
-        }
-      }
-    });
-    return hasAnnotation[0];
-  }
-
-  protected String getFunctionSignature(FunctionDeclaration function) {
+  protected String getFunctionSignature(FunctionDeclaration function, boolean isPrototype) {
     StringBuilder sb = new StringBuilder();
-    String returnType = nameTable.getObjCType(function.getReturnType().getTypeBinding());
+    String returnType = nameTable.getObjCType(function.getReturnType().getTypeMirror());
     returnType += returnType.endsWith("*") ? "" : " ";
     sb.append(returnType).append(function.getName()).append('(');
-    for (Iterator<SingleVariableDeclaration> iter = function.getParameters().iterator();
-         iter.hasNext(); ) {
-      IVariableBinding var = iter.next().getVariableBinding();
-      String paramType = nameTable.getObjCType(var.getType());
-      paramType += (paramType.endsWith("*") ? "" : " ");
-      sb.append(paramType + nameTable.getVariableShortName(var));
-      if (iter.hasNext()) {
-        sb.append(", ");
+    if (isPrototype && function.getParameters().isEmpty()) {
+      sb.append("void");
+    } else {
+      for (Iterator<SingleVariableDeclaration> iter = function.getParameters().iterator();
+           iter.hasNext(); ) {
+        VariableElement var = iter.next().getVariableElement();
+        String paramType = nameTable.getObjCType(var.asType());
+        paramType += (paramType.endsWith("*") ? "" : " ");
+        sb.append(paramType + nameTable.getVariableShortName(var));
+        if (iter.hasNext()) {
+          sb.append(", ");
+        }
       }
     }
     sb.append(')');

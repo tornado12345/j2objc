@@ -24,15 +24,41 @@
 #include <pthread.h>
 #include <AssertMacros.h>
 #include <libkern/OSAtomic.h>
+#include <os/lock.h>
 
 #include "JreEmulation.h"
+#include "java/lang/Thread.h"
+#include "java_lang_Thread.h"
 #include "objc-sync.h"
+
+#pragma clang diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
 
 // Redefine DEBUG_ASSERT_MESSAGE macro to not call the deprecated DebugAssert call.
 #undef DEBUG_ASSERT_MESSAGE
 #define DEBUG_ASSERT_MESSAGE(name, assertion, label, message, file, line, value) \
   fprintf(stderr, "Assertion failed: %s, %s file: %s, line: %d\n", \
       assertion, (message != 0) ? message : "", file, line);
+
+// OSSpinlock causes deadlock on iOS. we avoid it if possible
+#undef J2OBJC_FAST_LOCK_TYPE
+#undef J2OBJC_FAST_LOCK_LOCK
+#undef J2OBJC_FAST_LOCK_UNLOCK
+
+#if !defined(__IPHONE_10_0) || __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_10_0
+#define J2OBJC_FAST_LOCK_TYPE OSSpinLock
+#define J2OBJC_FAST_LOCK_LOCK(LOCK) OSSpinLockLock(LOCK)
+#define J2OBJC_FAST_LOCK_UNLOCK(LOCK) OSSpinLockUnlock(LOCK)
+
+#else
+
+#define J2OBJC_FAST_LOCK_TYPE os_unfair_lock_t
+#define J2OBJC_FAST_LOCK_LOCK(LOCK) os_unfair_lock_lock(LOCK)
+#define J2OBJC_FAST_LOCK_UNLOCK(LOCK) os_unfair_lock_unlock(LOCK)
+
+#endif
+
 
 //
 // Allocate a lock only when needed.  Since few locks are needed at any point
@@ -46,10 +72,10 @@ static pthread_mutexattr_t* recursiveAttributes()
 {
     if ( !sRecursiveLockAttrIntialized ) {
         int err = pthread_mutexattr_init(&sRecursiveLockAttr);
-        require_noerr_string(err, done, "pthread_mutexattr_init failed");
+        __Require_noErr_String(err, done, "pthread_mutexattr_init failed");
 
         err = pthread_mutexattr_settype(&sRecursiveLockAttr, PTHREAD_MUTEX_RECURSIVE);
-        require_noerr_string(err, done, "pthread_mutexattr_settype failed");
+        __Require_noErr_String(err, done, "pthread_mutexattr_settype failed");
 
         sRecursiveLockAttrIntialized = true;
     }
@@ -79,7 +105,7 @@ typedef struct SyncCache {
 } SyncCache;
 
 typedef struct {
-    OSSpinLock lock;
+    J2OBJC_FAST_LOCK_TYPE lock;
     SyncData *data;
 } SyncList __attribute__((aligned(64)));
 // aligned to put locks on separate cache lines
@@ -150,11 +176,12 @@ static SyncCache *fetch_cache(BOOL create)
 }
 
 
-static SyncData* id2data(id object, enum usage why)
+static SyncCacheItem* id2SyncCacheItem(id object, enum usage why)
 {
-    OSSpinLock *lockp = &LOCK_FOR_OBJ(object);
+    J2OBJC_FAST_LOCK_TYPE *lockp = &LOCK_FOR_OBJ(object);
     SyncData **listp = &LIST_FOR_OBJ(object);
     SyncData* result = NULL;
+    SyncCacheItem *item = NULL;
     int err;
 
     // Check per-thread cache of already-owned locks for matching object
@@ -162,15 +189,15 @@ static SyncData* id2data(id object, enum usage why)
     if (cache) {
         unsigned i;
         for (i = 0; i < cache->used; i++) {
-            SyncCacheItem *item = &cache->list[i];
+            item = &cache->list[i];
             if (item->data->object != object) continue;
 
             // Found a match.
             result = item->data;
-            require_action_string(result->threadCount > 0, cache_done,
-                                  result = NULL, "id2data cache is buggy");
-            require_action_string(item->lockCount > 0, cache_done,
-                                  result = NULL, "id2data cache is buggy");
+            __Require_Action_String(result->threadCount > 0, cache_done,
+                                  item = NULL, "id2data cache is buggy");
+            __Require_Action_String(item->lockCount > 0, cache_done,
+                                  item = NULL, "id2data cache is buggy");
 
             switch(why) {
             case ACQUIRE:
@@ -192,7 +219,7 @@ static SyncData* id2data(id object, enum usage why)
             }
 
         cache_done:
-            return result;
+            return item;
         }
     }
     if (why == TEST) {
@@ -206,7 +233,7 @@ static SyncData* id2data(id object, enum usage why)
     // We could keep the nodes in some hash table if we find that there are
     // more than 20 or so distinct locks active, but we don't do that now.
 
-    OSSpinLockLock(lockp);
+    J2OBJC_FAST_LOCK_LOCK(lockp);
 
     SyncData* p;
     SyncData* firstUnused = NULL;
@@ -241,31 +268,39 @@ static SyncData* id2data(id object, enum usage why)
     result->object = object;
     result->threadCount = 1;
     err = pthread_mutex_init(&result->mutex, recursiveAttributes());
-    require_noerr_string(err, done, "pthread_mutex_init failed");
+    __Require_noErr_String(err, done, "pthread_mutex_init failed");
     err = pthread_cond_init(&result->conditionVariable, NULL);
-    require_noerr_string(err, done, "pthread_cond_init failed");
+    __Require_noErr_String(err, done, "pthread_cond_init failed");
     result->nextData = *listp;
     *listp = result;
 
  done:
-    OSSpinLockUnlock(lockp);
+    J2OBJC_FAST_LOCK_UNLOCK(lockp);
     if (result) {
         // Only new ACQUIRE should get here.
         // All RELEASE and CHECK and recursive ACQUIRE are
         // handled by the per-thread cache above.
 
-        require_string(result != NULL, really_done, "id2data is buggy");
-        require_action_string(why == ACQUIRE || why == TEST, really_done,
-                              result = NULL, "id2data is buggy");
-        require_action_string(result->object == object, really_done,
-                              result = NULL, "id2data is buggy");
+        __Require_String(result != NULL, really_done, "id2data is buggy");
+        __Require_Action_String(why == ACQUIRE || why == TEST, really_done,
+                              item = NULL, "id2data is buggy");
+        __Require_Action_String(result->object == object, really_done,
+                              item = NULL, "id2data is buggy");
 
         if (!cache) cache = fetch_cache(YES);
-        cache->list[cache->used++] = (SyncCacheItem){result, 1};
+        item = &cache->list[cache->used++];
+        *item = (SyncCacheItem){result, 1};
     }
 
  really_done:
-    return result;
+    return item;
+}
+
+
+static SyncData* id2data(id object, enum usage why)
+{
+    SyncCacheItem *item = id2SyncCacheItem(object, why);
+    return item ? item->data : NULL;
 }
 
 
@@ -285,10 +320,21 @@ int objc_sync_enter(id obj)
 
     if (obj) {
         SyncData* data = id2data(obj, ACQUIRE);
-        require_action_string(data != NULL, done, result = OBJC_SYNC_NOT_INITIALIZED, "id2data failed");
+        __Require_Action_String(data != NULL, done, result = OBJC_SYNC_NOT_INITIALIZED, "id2data failed");
 
-        result = pthread_mutex_lock(&data->mutex);
-        require_noerr_string(result, done, "pthread_mutex_lock failed");
+        JavaLangThread *javaThread = getCurrentJavaThreadOrNull();
+        if (javaThread != NULL) {
+            result = pthread_mutex_trylock(&data->mutex);
+            if (result != 0 ) {
+                JreAssignVolatileInt(&javaThread->state_, JavaLangThread_STATE_BLOCKED);
+                result = pthread_mutex_lock(&data->mutex);
+                JreAssignVolatileInt(&javaThread->state_, JavaLangThread_STATE_RUNNABLE);
+            }
+        } else {
+            result = pthread_mutex_lock(&data->mutex);
+        }
+
+        __Require_noErr_String(result, done, "pthread_mutex_lock failed");
     } else {
         // @synchronized(nil) does nothing
 #ifdef DEBUG_NIL_SYNC
@@ -310,10 +356,10 @@ int objc_sync_exit(id obj)
 
     if (obj) {
         SyncData* data = id2data(obj, RELEASE);
-        require_action_string(data != NULL, done, result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR, "id2data failed");
+        __Require_Action_String(data != NULL, done, result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR, "id2data failed");
 
         result = pthread_mutex_unlock(&data->mutex);
-        require_noerr_string(result, done, "pthread_mutex_unlock failed");
+        __Require_noErr_String(result, done, "pthread_mutex_unlock failed");
     } else {
         // @synchronized(nil) does nothing
     }
@@ -332,34 +378,59 @@ int objc_sync_wait(id obj, long long milliSecondsMaxWait)
 {
     int result = OBJC_SYNC_SUCCESS;
 
-    SyncData* data = id2data(obj, CHECK);
-    if (!data) {
-      return OBJC_SYNC_NOT_OWNING_THREAD_ERROR;
+    SyncCacheItem* syncCacheItem = id2SyncCacheItem(obj, CHECK);
+
+    if (!syncCacheItem) {
+        return OBJC_SYNC_NOT_OWNING_THREAD_ERROR;
     }
 
+    int savedLockCount = syncCacheItem->lockCount;
+    SyncData* data = syncCacheItem->data;
+
+    // Perform savedLockCount-1 unlock actions on obj
+    for (int i = 0; i < savedLockCount - 1; ++i) {
+        pthread_mutex_unlock(&data->mutex);
+    }
+
+    JavaLangThread *javaThread = getCurrentJavaThreadOrNull();
 
     // XXX need to retry cond_wait under out-of-our-control failures
     if ( milliSecondsMaxWait == 0 ) {
+        if (javaThread != NULL) {
+          JreAssignVolatileInt(&javaThread->state_, JavaLangThread_STATE_WAITING);
+        }
         result = pthread_cond_wait(&data->conditionVariable, &data->mutex);
-        require_noerr_string(result, done, "pthread_cond_wait failed");
+        __Require_noErr_String(result, done, "pthread_cond_wait failed");
     }
     else {
        	struct timespec maxWait;
         maxWait.tv_sec  = (time_t)(milliSecondsMaxWait / 1000);
         maxWait.tv_nsec = (long)((milliSecondsMaxWait - (maxWait.tv_sec * 1000)) * 1000000);
+        if (javaThread != NULL) {
+          JreAssignVolatileInt(&javaThread->state_, JavaLangThread_STATE_TIMED_WAITING);
+        }
         result = pthread_cond_timedwait_relative_np(&data->conditionVariable, &data->mutex, &maxWait);
         if (result != ETIMEDOUT) {
-          require_noerr_string(result, done, "pthread_cond_timedwait_relative_np failed");
+          __Require_noErr_String(result, done, "pthread_cond_timedwait_relative_np failed");
         }
     }
     // no-op to keep compiler from complaining about branch to next instruction
-    data = NULL;
+    syncCacheItem = NULL;
 
 done:
+    if (javaThread != NULL) {
+      JreAssignVolatileInt(&javaThread->state_, JavaLangThread_STATE_RUNNABLE);
+    }
+
     if ( result == EPERM )
         result = OBJC_SYNC_NOT_OWNING_THREAD_ERROR;
     else if ( result == ETIMEDOUT )
         result = OBJC_SYNC_TIMED_OUT;
+
+    // Perform savedLockCount-1 lock actions on obj
+    for (int i = 0; i < savedLockCount - 1; ++i) {
+        pthread_mutex_lock(&data->mutex);
+    }
 
     return result;
 }
@@ -377,7 +448,7 @@ int objc_sync_notify(id obj)
     }
 
     result = pthread_cond_signal(&data->conditionVariable);
-    require_noerr_string(result, done, "pthread_cond_signal failed");
+    __Require_noErr_String(result, done, "pthread_cond_signal failed");
 
 done:
     if ( result == EPERM )
@@ -399,7 +470,7 @@ int objc_sync_notifyAll(id obj)
     }
 
     result = pthread_cond_broadcast(&data->conditionVariable);
-    require_noerr_string(result, done, "pthread_cond_broadcast failed");
+    __Require_noErr_String(result, done, "pthread_cond_broadcast failed");
 
 done:
     if ( result == EPERM )
@@ -411,11 +482,9 @@ done:
 
 // Returns true if an object has a pthread_mutux allocated for it on this thread.
 BOOL j2objc_sync_holds_lock(id obj) {
-  nil_chk(obj);
+  (void)nil_chk(obj);
   SyncData* data = id2data(obj, TEST);
   return data ? YES : NO;
 }
-
-
-
+#pragma clang diagnostic pop
 

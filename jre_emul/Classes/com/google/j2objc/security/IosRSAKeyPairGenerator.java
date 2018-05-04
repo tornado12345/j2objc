@@ -25,7 +25,9 @@ import java.security.spec.AlgorithmParameterSpec;
 import java.security.spec.RSAKeyGenParameterSpec;
 
 /*-[
-#import "com/google/j2objc/security/IosRSAKey.h"
+#include "com/google/j2objc/security/IosRSAKey.h"
+#include "com/google/j2objc/security/IosRSAKeyFactory.h"
+#include "java/security/ProviderException.h"
 ]-*/
 
 public class IosRSAKeyPairGenerator extends KeyPairGeneratorSpi {
@@ -37,25 +39,32 @@ public class IosRSAKeyPairGenerator extends KeyPairGeneratorSpi {
 
   @Override
   public native KeyPair generateKeyPair() /*-[
-    // Requested keypair attributes.
-    NSMutableDictionary * privateKeyAttr = [[NSMutableDictionary alloc] init];
-    [privateKeyAttr setObject:[NSNumber numberWithBool:true] forKey:(id)kSecAttrIsPermanent];
-    NSData *privateTag = [ComGoogleJ2objcSecurityIosRSAKey_get_PRIVATE_KEY_TAG()
-                          dataUsingEncoding:NSUTF8StringEncoding];
-    [privateKeyAttr setObject:privateTag forKey:(id)kSecAttrApplicationTag];
+    // Delete any previous key definition.
+    [self deleteKey:ComGoogleJ2objcSecurityIosRSAKey_PUBLIC_KEY_TAG
+        keyClass:kSecAttrKeyClassPublic];
 
-    NSMutableDictionary * publicKeyAttr = [[NSMutableDictionary alloc] init];
-    [publicKeyAttr setObject:[NSNumber numberWithBool:true] forKey:(id)kSecAttrIsPermanent];
+    [self deleteKey:ComGoogleJ2objcSecurityIosRSAKey_PRIVATE_KEY_TAG
+        keyClass:kSecAttrKeyClassPrivate];
+
+    // Requested keypair attributes.
+    NSMutableDictionary * keyPairAttr = [[NSMutableDictionary alloc] init];
+    NSMutableDictionary *publicKeyAttr = [[NSMutableDictionary alloc] init];
+    NSMutableDictionary * privateKeyAttr = [[NSMutableDictionary alloc] init];
+
     NSData *publicTag = [ComGoogleJ2objcSecurityIosRSAKey_get_PUBLIC_KEY_TAG()
                          dataUsingEncoding:NSUTF8StringEncoding];
-    [publicKeyAttr setObject:publicTag forKey:(id)kSecAttrApplicationTag];
+    publicKeyAttr[(id)kSecAttrApplicationTag] = publicTag;
+    publicKeyAttr[(id)kSecAttrIsPermanent] = (id)kCFBooleanTrue;
 
-    NSMutableDictionary * keyPairAttr = [[NSMutableDictionary alloc] init];
-    [keyPairAttr setObject:(id)kSecAttrKeyTypeRSA forKey:(id)kSecAttrKeyType];
-    [keyPairAttr setObject:[NSNumber numberWithUnsignedInteger:keySize_]
-                    forKey:(id)kSecAttrKeySizeInBits];
-    [keyPairAttr setObject:privateKeyAttr forKey:@"private"];
-    [keyPairAttr setObject:publicKeyAttr forKey:@"public"];
+    NSData *privateTag = [ComGoogleJ2objcSecurityIosRSAKey_get_PRIVATE_KEY_TAG()
+                          dataUsingEncoding:NSUTF8StringEncoding];
+    privateKeyAttr[(id)kSecAttrApplicationTag] = publicTag;
+    privateKeyAttr[(id)kSecAttrIsPermanent] = (id)kCFBooleanTrue;
+
+    keyPairAttr[(id)kSecAttrKeyType] = (id)kSecAttrKeyTypeRSA;
+    keyPairAttr[(id)kSecAttrKeySizeInBits] = [NSNumber numberWithUnsignedInteger:keySize_];
+    keyPairAttr[(id)kSecPublicKeyAttrs] = publicKeyAttr;
+    keyPairAttr[(id)kSecPublicKeyAttrs] = privateKeyAttr;
 
     SecKeyRef publicKeyRef = NULL;
     SecKeyRef privateKeyRef = NULL;
@@ -73,10 +82,34 @@ public class IosRSAKeyPairGenerator extends KeyPairGeneratorSpi {
     JavaSecurityKeyPair *keyPair =
         AUTORELEASE([[JavaSecurityKeyPair alloc] initWithJavaSecurityPublicKey:publicKey
                                                     withJavaSecurityPrivateKey:privateKey]);
+
     [publicKey release];
     [privateKey release];
     return keyPair;
   ]-*/;
+
+  /*-[
+  - (void) deleteKey:(NSString *)tag
+            keyClass:(CFStringRef) keyClass {
+    NSData *tagBytes = [tag dataUsingEncoding:NSUTF8StringEncoding];
+
+    NSMutableDictionary *query = [NSMutableDictionary dictionary];
+    query[(id)kSecClass] = (id)kSecClassKey;
+    query[(id)kSecAttrKeyType] = (id)kSecAttrKeyTypeRSA;
+    query[(id)kSecAttrKeyClass] = (id)keyClass;
+    query[(id)kSecAttrApplicationTag] = tagBytes;
+    OSStatus status = SecItemDelete((CFDictionaryRef) query);
+    if (status != errSecSuccess && status != errSecItemNotFound) {
+#if TARGET_OS_IPHONE || TARGET_OS_SIMULATOR
+      NSString *msg = [NSString stringWithFormat:
+          @"Problem removing previous public key from the keychain, OSStatus: %d", (int)status];
+      @throw create_JavaSecurityProviderException_initWithNSString_(msg);
+#else
+      NSLog(@"macOS keychain support not implemented, OSStatus: %d", (int)status);
+#endif
+    }
+  }
+  ]-*/
 
   @Override
   public void initialize(int keySize, SecureRandom random) {

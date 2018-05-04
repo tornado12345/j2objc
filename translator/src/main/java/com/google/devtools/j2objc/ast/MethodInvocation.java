@@ -15,14 +15,11 @@
 package com.google.devtools.j2objc.ast;
 
 import com.google.common.base.Preconditions;
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.ExecutablePair;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeMirror;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
 
 /**
  * Method invocation node type.
@@ -32,9 +29,9 @@ public class MethodInvocation extends Expression {
   private ExecutablePair method = ExecutablePair.NULL;
   // The context-specific known type of this expression.
   private TypeMirror typeMirror = null;
-  private ChildLink<Expression> expression = ChildLink.create(Expression.class, this);
-  private ChildLink<SimpleName> name = ChildLink.create(SimpleName.class, this);
-  private ChildList<Expression> arguments = ChildList.create(Expression.class, this);
+  private TypeMirror varargsType = null;
+  private final ChildLink<Expression> expression = ChildLink.create(Expression.class, this);
+  private final ChildList<Expression> arguments = ChildList.create(Expression.class, this);
 
   public MethodInvocation() {}
 
@@ -42,27 +39,15 @@ public class MethodInvocation extends Expression {
     super(other);
     method = other.getExecutablePair();
     typeMirror = other.getTypeMirror();
+    varargsType = other.getVarargsType();
     expression.copyFrom(other.getExpression());
-    name.copyFrom(other.getName());
     arguments.copyFrom(other.getArguments());
-  }
-
-  public MethodInvocation(IMethodBinding binding, ITypeBinding typeBinding, Expression expression) {
-    this(
-        new ExecutablePair(
-            BindingConverter.getExecutableElement(binding), BindingConverter.getType(binding)),
-        BindingConverter.getType(typeBinding), expression);
-  }
-
-  public MethodInvocation(IMethodBinding binding, Expression expression) {
-    this(binding, binding.getReturnType(), expression);
   }
 
   public MethodInvocation(ExecutablePair method, TypeMirror typeMirror, Expression expression) {
     this.method = method;
     this.typeMirror = typeMirror;
     this.expression.set(expression);
-    name.set(new SimpleName(method.element()));
   }
 
   public MethodInvocation(ExecutablePair method, Expression expression) {
@@ -72,16 +57,6 @@ public class MethodInvocation extends Expression {
   @Override
   public Kind getKind() {
     return Kind.METHOD_INVOCATION;
-  }
-
-  public IMethodBinding getMethodBinding() {
-    return (IMethodBinding) BindingConverter.unwrapTypeMirrorIntoBinding(method.type());
-  }
-
-  public void setMethodBinding(IMethodBinding newMethodBinding) {
-    method = new ExecutablePair(
-        BindingConverter.getExecutableElement(newMethodBinding),
-        BindingConverter.getType(newMethodBinding));
   }
 
   public ExecutablePair getExecutablePair() {
@@ -111,21 +86,21 @@ public class MethodInvocation extends Expression {
     return this;
   }
 
+  public TypeMirror getVarargsType() {
+    return varargsType;
+  }
+
+  public MethodInvocation setVarargsType(TypeMirror type) {
+    varargsType = type;
+    return this;
+  }
+
   public Expression getExpression() {
     return expression.get();
   }
 
   public MethodInvocation setExpression(Expression newExpression) {
     expression.set(newExpression);
-    return this;
-  }
-
-  public SimpleName getName() {
-    return name.get();
-  }
-
-  public MethodInvocation setName(SimpleName newName) {
-    name.set(newName);
     return this;
   }
 
@@ -142,7 +117,6 @@ public class MethodInvocation extends Expression {
   protected void acceptInner(TreeVisitor visitor) {
     if (visitor.visit(this)) {
       expression.accept(visitor);
-      name.accept(visitor);
       arguments.accept(visitor);
     }
     visitor.endVisit(this);
@@ -157,6 +131,6 @@ public class MethodInvocation extends Expression {
   public void validateInner() {
     super.validateInner();
     Preconditions.checkNotNull(method);
-    Preconditions.checkNotNull(name.get());
+    Preconditions.checkNotNull(typeMirror);
   }
 }

@@ -14,13 +14,11 @@
 
 package com.google.devtools.j2objc.translate;
 
-import com.google.common.collect.Sets;
-import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
 import com.google.devtools.j2objc.ast.AnnotationTypeDeclaration;
 import com.google.devtools.j2objc.ast.Block;
 import com.google.devtools.j2objc.ast.BodyDeclaration;
 import com.google.devtools.j2objc.ast.ClassInstanceCreation;
-import com.google.devtools.j2objc.ast.CommonTypeDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.ConstructorInvocation;
 import com.google.devtools.j2objc.ast.Expression;
@@ -44,27 +42,27 @@ import com.google.devtools.j2objc.ast.SuperMethodInvocation;
 import com.google.devtools.j2objc.ast.ThisExpression;
 import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.ast.TreeVisitor;
+import com.google.devtools.j2objc.ast.TypeDeclaration;
 import com.google.devtools.j2objc.ast.UnitTreeVisitor;
-import com.google.devtools.j2objc.gen.SignatureGenerator;
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.FunctionElement;
-import com.google.devtools.j2objc.types.GeneratedVariableBinding;
-import com.google.devtools.j2objc.util.BindingUtil;
+import com.google.devtools.j2objc.types.GeneratedExecutableElement;
+import com.google.devtools.j2objc.types.GeneratedVariableElement;
 import com.google.devtools.j2objc.util.CaptureInfo;
 import com.google.devtools.j2objc.util.ElementUtil;
-import com.google.devtools.j2objc.util.ErrorUtil;
 import com.google.devtools.j2objc.util.NameTable;
-import com.google.devtools.j2objc.util.TranslationUtil;
+import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.devtools.j2objc.util.UnicodeUtils;
+import java.lang.reflect.Modifier;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
-import org.eclipse.jdt.core.dom.Modifier;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Converts methods that don't need dynamic dispatch to C functions. This optimization
@@ -76,7 +74,7 @@ import org.eclipse.jdt.core.dom.Modifier;
 public class Functionizer extends UnitTreeVisitor {
 
   private final CaptureInfo captureInfo;
-  private Set<IMethodBinding> functionizableMethods;
+  private Set<ExecutableElement> functionizableMethods;
 
   public Functionizer(CompilationUnit unit) {
     super(unit);
@@ -85,86 +83,113 @@ public class Functionizer extends UnitTreeVisitor {
 
   @Override
   public boolean visit(CompilationUnit node) {
-    functionizableMethods = determineFunctionizableMethods(node);
+    FunctionizableFinder finder = new FunctionizableFinder();
+    node.accept(finder);
+    functionizableMethods = finder.getFunctionizableMethods();
     return true;
   }
 
-  /**
-   * Determines the set of methods to functionize. In addition to a method being
-   * final we must also find an invocation for that method. Static methods, though,
-   * are always functionized since there are no dynamic dispatch issues.
-   */
-  private Set<IMethodBinding> determineFunctionizableMethods(final CompilationUnit unit) {
-    final Set<IMethodBinding> functionizableDeclarations = Sets.newHashSet();
-    final Set<IMethodBinding> invocations = Sets.newHashSet();
-    unit.accept(new TreeVisitor() {
-      @Override
-      public void endVisit(MethodDeclaration node) {
-        if (canFunctionize(node)) {
-          functionizableDeclarations.add(node.getMethodBinding());
+  static class MethodInfo {
+
+    private Boolean functionizable = null;
+    private Set<ExecutableElement> superCalls = new HashSet<>();
+
+    private boolean resolveFunctionizable(Map<ExecutableElement, MethodInfo> infoMap) {
+      for (ExecutableElement superCall : superCalls) {
+        MethodInfo superCallInfo = infoMap.get(superCall);
+        if (superCallInfo == null || !superCallInfo.isFunctionizable(infoMap)) {
+          return false;
         }
       }
+      return true;
+    }
 
-      @Override
-      public void endVisit(MethodInvocation node) {
-        invocations.add(node.getMethodBinding().getMethodDeclaration());
+    private boolean isFunctionizable(Map<ExecutableElement, MethodInfo> infoMap) {
+      if (functionizable == null) {
+        functionizable = resolveFunctionizable(infoMap);
       }
-    });
-    return Sets.intersection(functionizableDeclarations, invocations);
+      return functionizable;
+    }
+
+    private void addSuperCall(ExecutableElement method) {
+      superCalls.add(method);
+    }
   }
 
-  @Override
-  public boolean visit(AnnotationTypeDeclaration node) {
-    return false;
+  private static class FunctionizableFinder extends TreeVisitor {
+
+    // Don't need a stack here because local types have already been extracted.
+    private MethodInfo currentMethod = null;
+    private Map<ExecutableElement, MethodInfo> infoMap = new HashMap<>();
+    private Set<ExecutableElement> invocations = new HashSet<>();
+
+    @Override
+    public boolean visit(MethodDeclaration node) {
+      if (isFunctionizingCandidate(node)) {
+        infoMap.put(node.getExecutableElement(), currentMethod = new MethodInfo());
+      }
+      return true;
+    }
+
+    @Override
+    public void endVisit(MethodDeclaration node) {
+      currentMethod = null;
+    }
+
+    @Override
+    public void endVisit(MethodInvocation node) {
+      ExecutableElement method = node.getExecutableElement();
+      // Regular invocations can only be functionized if the target is private or final, otherwise
+      // the target method might be overridden by a subclass. Private methods are always
+      // functionized so we only check for final methods here.
+      if (ElementUtil.isFinal(method)) {
+        invocations.add(method);
+      }
+    }
+
+    @Override
+    public void endVisit(SuperMethodInvocation node) {
+      ExecutableElement method = node.getExecutableElement();
+      // Super invocations can always be functionized because it is not a "virtual" invocation.
+      invocations.add(method);
+
+      if (currentMethod != null) {
+        currentMethod.addSuperCall(method);
+      }
+    }
+
+    private Set<ExecutableElement> getFunctionizableMethods() {
+      Iterator<ExecutableElement> iter = invocations.iterator();
+      while (iter.hasNext()) {
+        ExecutableElement method = iter.next();
+        MethodInfo info = infoMap.get(method);
+        if (info == null || !info.isFunctionizable(infoMap)) {
+          iter.remove();
+        }
+      }
+      return invocations;
+    }
   }
 
-  @Override
-  public boolean visit(NormalAnnotation node) {
-    return false;
-  }
-
-  @Override
-  public boolean visit(SingleMemberAnnotation node) {
-    return false;
-  }
-
-  /**
-   * Determines whether an instance method can be functionized.
-   */
-  private boolean canFunctionize(MethodDeclaration node) {
-    IMethodBinding m = node.getMethodBinding();
+  private static boolean isFunctionizingCandidate(MethodDeclaration node) {
+    ExecutableElement method = node.getExecutableElement();
     int modifiers = node.getModifiers();
 
-    // Never functionize these types of methods.
-    if (Modifier.isStatic(modifiers) || Modifier.isAbstract(modifiers) || !node.hasDeclaration()
-        || m.isAnnotationMember()) {
+    // Default methods, static methods and constructors are always functionized. We only care about
+    // regular instance methods.
+    if (!ElementUtil.isInstanceMethod(method) || ElementUtil.isDefault(method)
+        || Modifier.isAbstract(modifiers) || !node.hasDeclaration()) {
       return false;
     }
 
     // Don't functionize equals/hash, since they are often called by collections.
-    String name = m.getName();
-    if ((name.equals("hashCode") && m.getParameterTypes().length == 0)
-        || (name.equals("equals") && m.getParameterTypes().length == 1)) {
+    String name = ElementUtil.getName(method);
+    if ((name.equals("hashCode") && method.getParameters().isEmpty())
+        || (name.equals("equals") && method.getParameters().size() == 1)) {
       return false;
     }
 
-    if (!BindingUtil.isPrivate(m) && !BindingUtil.isFinal(m)) {
-      return false;
-    }
-
-    return !hasSuperMethodInvocation(node);
-  }
-
-  private static boolean hasSuperMethodInvocation(MethodDeclaration node) {
-    final boolean[] result = new boolean[1];
-    result[0] = false;
-    node.accept(new TreeVisitor() {
-      @Override
-      public void endVisit(SuperMethodInvocation node) {
-        result[0] = true;
-      }
-    });
-    return result[0];
+    return true;
   }
 
   private FunctionElement newFunctionElement(ExecutableElement method) {
@@ -200,59 +225,61 @@ public class Functionizer extends UnitTreeVisitor {
     }
   }
 
-  @Override
-  public void endVisit(MethodInvocation node) {
-    IMethodBinding binding = node.getMethodBinding().getMethodDeclaration();
-    if (!BindingUtil.isStatic(binding) && !functionizableMethods.contains(binding)) {
-      return;
-    }
+  private void functionizeInvocation(
+      Expression node, ExecutableElement element, Expression receiver,
+      List<Expression> methodArgs) {
+    FunctionInvocation functionInvocation =
+        new FunctionInvocation(newFunctionElement(element), node.getTypeMirror());
+    List<Expression> funcArgs = functionInvocation.getArguments();
+    TreeUtil.moveList(methodArgs, funcArgs);
 
-    FunctionInvocation functionInvocation = new FunctionInvocation(
-        newFunctionElement(BindingConverter.getExecutableElement(binding)), node.getTypeBinding());
-    List<Expression> args = functionInvocation.getArguments();
-    TreeUtil.moveList(node.getArguments(), args);
-
-    if (!BindingUtil.isStatic(binding)) {
-      Expression expr = node.getExpression();
-      if (expr == null) {
-        expr = new ThisExpression(TreeUtil.getEnclosingTypeBinding(node));
+    if (!ElementUtil.isStatic(element)) {
+      if (receiver == null) {
+        receiver = new ThisExpression(TreeUtil.getEnclosingTypeElement(node).asType());
       }
-      args.add(0, TreeUtil.remove(expr));
+      funcArgs.add(0, TreeUtil.remove(receiver));
     }
 
     node.replaceWith(functionInvocation);
   }
 
   @Override
-  public void endVisit(SuperMethodInvocation node) {
-    IMethodBinding binding = node.getMethodBinding().getMethodDeclaration();
-    // Yes, super method invocations can be static.
-    if (!BindingUtil.isStatic(binding)) {
-      return;
+  public void endVisit(MethodInvocation node) {
+    ExecutableElement method = node.getExecutableElement();
+    if (ElementUtil.isStatic(method) || ElementUtil.isPrivate(method)
+        || (functionizableMethods.contains(method) && ElementUtil.isFinal(method))) {
+      functionizeInvocation(node, method, node.getExpression(), node.getArguments());
     }
+  }
 
-    FunctionInvocation functionInvocation = new FunctionInvocation(
-        newFunctionElement(BindingConverter.getExecutableElement(binding)), node.getTypeBinding());
-    TreeUtil.moveList(node.getArguments(), functionInvocation.getArguments());
-    node.replaceWith(functionInvocation);
+  @Override
+  public void endVisit(SuperMethodInvocation node) {
+    ExecutableElement method = node.getExecutableElement();
+    if (ElementUtil.isStatic(method) || ElementUtil.isPrivate(method)
+        || functionizableMethods.contains(method) || ElementUtil.isDefault(method)) {
+      functionizeInvocation(node, method, node.getReceiver(), node.getArguments());
+    }
   }
 
   @Override
   public void endVisit(SuperConstructorInvocation node) {
     ExecutableElement element = node.getExecutableElement();
-    CommonTypeDeclaration typeDecl = TreeUtil.getEnclosingType(node);
-    TypeElement superType = ElementUtil.getSuperclass(typeDecl.getTypeElement());
+    AbstractTypeDeclaration typeDecl = TreeUtil.getEnclosingType(node);
+    TypeElement type = typeDecl.getTypeElement();
     FunctionElement funcElement = newFunctionElement(element);
-    FunctionInvocation invocation = new FunctionInvocation(funcElement, typeUtil.getVoidType());
+    FunctionInvocation invocation = new FunctionInvocation(funcElement, typeUtil.getVoid());
     List<Expression> args = invocation.getArguments();
     args.add(new ThisExpression(ElementUtil.getDeclaringClass(element).asType()));
-    if (captureInfo.needsOuterParam(superType)) {
-      Expression outerArg = TreeUtil.remove(node.getExpression());
-      args.add(outerArg != null ? outerArg : typeDecl.getSuperOuter().copy());
+    if (typeDecl instanceof TypeDeclaration) {
+      TypeDeclaration typeDeclaration = (TypeDeclaration) typeDecl;
+      if (captureInfo.needsOuterParam(ElementUtil.getSuperclass(type))) {
+        Expression outerArg = TreeUtil.remove(node.getExpression());
+        args.add(outerArg != null ? outerArg : typeDeclaration.getSuperOuter().copy());
+      }
+      TreeUtil.moveList(typeDeclaration.getSuperCaptureArgs(), args);
     }
-    TreeUtil.moveList(typeDecl.getSuperCaptureArgs(), args);
     TreeUtil.moveList(node.getArguments(), args);
-    if (ElementUtil.isEnum(superType)) {
+    if (ElementUtil.isEnum(type)) {
       for (VariableElement param : captureInfo.getImplicitEnumParams()) {
         args.add(new SimpleName(param));
       }
@@ -266,7 +293,7 @@ public class Functionizer extends UnitTreeVisitor {
     ExecutableElement element = node.getExecutableElement();
     TypeElement declaringClass = ElementUtil.getDeclaringClass(element);
     FunctionElement funcElement = newFunctionElement(element);
-    FunctionInvocation invocation = new FunctionInvocation(funcElement, typeUtil.getVoidType());
+    FunctionInvocation invocation = new FunctionInvocation(funcElement, typeUtil.getVoid());
     List<Expression> args = invocation.getArguments();
     args.add(new ThisExpression(declaringClass.asType()));
     for (VariableElement captureParam : captureInfo.getImplicitPrefixParams(declaringClass)) {
@@ -286,7 +313,7 @@ public class Functionizer extends UnitTreeVisitor {
     TypeElement type = ElementUtil.getDeclaringClass(element);
     FunctionElement funcElement = newAllocatingConstructorElement(element);
     FunctionInvocation invocation = new FunctionInvocation(funcElement, node.getTypeMirror());
-    invocation.setHasRetainedResult(node.hasRetainedResult() || Options.useARC());
+    invocation.setHasRetainedResult(node.hasRetainedResult() || options.useARC());
     List<Expression> args = invocation.getArguments();
     Expression outerExpr = node.getExpression();
     if (outerExpr != null) {
@@ -306,51 +333,62 @@ public class Functionizer extends UnitTreeVisitor {
 
   @Override
   public void endVisit(MethodDeclaration node) {
-    IMethodBinding binding = node.getMethodBinding();
+    ExecutableElement element = node.getExecutableElement();
     // Don't functionize certain ObjC methods like dealloc or __annotations, since
     // they are added by the translator and need to remain in method form.
     if (!node.hasDeclaration()) {
       return;
     }
-    boolean isInstanceMethod = !BindingUtil.isStatic(binding) && !binding.isConstructor();
-    boolean isDefaultMethod = Modifier.isDefault(node.getModifiers());
+    boolean isConstructor = ElementUtil.isConstructor(element);
+    boolean isInstanceMethod = !ElementUtil.isStatic(element) && !isConstructor;
+    boolean isDefaultMethod = ElementUtil.isDefault(element);
     List<BodyDeclaration> declarationList = TreeUtil.asDeclarationSublist(node);
     if (!isInstanceMethod || isDefaultMethod || Modifier.isNative(node.getModifiers())
-        || functionizableMethods.contains(binding)) {
-      ITypeBinding declaringClass = binding.getDeclaringClass();
-      boolean isEnumConstructor = binding.isConstructor() && declaringClass.isEnum();
-      if (binding.isConstructor()) {
-        addImplicitParameters(node, BindingConverter.getTypeElement(declaringClass));
+        || ElementUtil.isPrivate(element) || functionizableMethods.contains(element)) {
+      TypeElement declaringClass = ElementUtil.getDeclaringClass(element);
+      boolean isEnumConstructor = isConstructor && ElementUtil.isEnum(declaringClass);
+      if (isConstructor) {
+        addImplicitParameters(node, declaringClass);
       }
       FunctionDeclaration function = makeFunction(node);
       declarationList.add(function);
-      if (binding.isConstructor() && !BindingUtil.isAbstract(declaringClass)
-          && !isEnumConstructor) {
+      if (isConstructor && !ElementUtil.isAbstract(declaringClass) && !isEnumConstructor) {
         declarationList.add(makeAllocatingConstructor(node, false));
         declarationList.add(makeAllocatingConstructor(node, true));
-      } else if (isEnumConstructor && Options.useARC()) {
+      } else if (isEnumConstructor && options.useARC()) {
         // Enums with ARC need the retaining constructor.
         declarationList.add(makeAllocatingConstructor(node, false));
       }
-      // Instance methods must be kept in case they are invoked using "super".
-      boolean keepMethod = isInstanceMethod
-          // Public methods must be kept for the public API.
-          || !(BindingUtil.isPrivateInnerType(declaringClass) || BindingUtil.isPrivate(binding))
-          // Methods must be kept for reflection if enabled.
-          || (TranslationUtil.needsReflection(BindingConverter.getTypeElement(declaringClass))
-              && !isEnumConstructor);
-      if (keepMethod) {
-        if (isDefaultMethod) {
-          // For default methods keep only the declaration. Implementing classes will add a shim.
-          node.setBody(null);
-          node.addModifiers(Modifier.ABSTRACT);
+      if (isDefaultMethod) {
+        // For default methods keep only the declaration. Implementing classes will add a shim.
+        node.setBody(null);
+        node.addModifiers(Modifier.ABSTRACT);
+      } else if (isInstanceMethod) {
+        // We can remove private instance methods if reflection is stripped.
+        if (translationUtil.needsReflection(declaringClass) || !ElementUtil.isPrivate(element)) {
+          setFunctionCaller(node, element);
         } else {
-          setFunctionCaller(node, binding);
+          node.remove();
+        }
+      } else if (isEnumConstructor) {
+        // Enum constructors are never needed.
+        node.remove();
+      } else if (translationUtil.needsReflection(declaringClass)) {
+        // Static methods and constructors, keep for reflection.
+        setFunctionCaller(node, element);
+        if (!options.emitWrapperMethods()) {
+          // Take out of the header, only needed for reflection.
+          node.setHasDeclaration(false);
         }
       } else {
-        node.remove();
+        // Static methods and constructors, no reflection.
+        if (options.emitWrapperMethods() && !ElementUtil.isPrivateInnerType(declaringClass)
+            && !ElementUtil.isPrivate(element)) {
+          setFunctionCaller(node, element);
+        } else {
+          node.remove();
+        }
       }
-      ErrorUtil.functionizedMethod();
     }
   }
 
@@ -369,25 +407,24 @@ public class Functionizer extends UnitTreeVisitor {
    * Create an equivalent function declaration for a given method.
    */
   private FunctionDeclaration makeFunction(MethodDeclaration method) {
-    IMethodBinding m = method.getMethodBinding();
     ExecutableElement elem = method.getExecutableElement();
-    ITypeBinding declaringClass = m.getDeclaringClass();
-    boolean isInstanceMethod = !BindingUtil.isStatic(m) && !m.isConstructor();
+    TypeElement declaringClass = ElementUtil.getDeclaringClass(elem);
+    boolean isInstanceMethod = !ElementUtil.isStatic(elem) && !ElementUtil.isConstructor(elem);
 
     FunctionDeclaration function =
-        new FunctionDeclaration(nameTable.getFullFunctionName(elem), m.getReturnType());
-    function.setJniSignature(SignatureGenerator.createJniFunctionSignature(m, elementUtil));
-    function.setLineNumber(method.getName().getLineNumber());
+        new FunctionDeclaration(nameTable.getFullFunctionName(elem), elem.getReturnType());
+    function.setJniSignature(signatureGenerator.createJniFunctionSignature(elem));
+    function.setLineNumber(method.getLineNumber());
 
-    if (!BindingUtil.isStatic(m)) {
-      GeneratedVariableBinding var = new GeneratedVariableBinding(NameTable.SELF_NAME, 0,
-          declaringClass, false, true, declaringClass, null);
+    if (!ElementUtil.isStatic(elem)) {
+      VariableElement var = GeneratedVariableElement.newParameter(
+          NameTable.SELF_NAME, declaringClass.asType(), null);
       function.addParameter(new SingleVariableDeclaration(var));
     }
     TreeUtil.copyList(method.getParameters(), function.getParameters());
 
     function.setModifiers(method.getModifiers() & Modifier.STATIC);
-    if (BindingUtil.isPrivate(m) || (isInstanceMethod && !BindingUtil.isDefault(m))) {
+    if (ElementUtil.isPrivate(elem) || (isInstanceMethod && !ElementUtil.isDefault(elem))) {
       function.addModifiers(Modifier.PRIVATE);
     } else {
       function.addModifiers(Modifier.PUBLIC);
@@ -400,16 +437,14 @@ public class Functionizer extends UnitTreeVisitor {
 
     function.setBody(TreeUtil.remove(method.getBody()));
 
-    if (BindingUtil.isStatic(m)) {
+    if (ElementUtil.isStatic(elem)) {
       // Add class initialization invocation, since this may be the first use of this class.
       String initName = UnicodeUtils.format("%s_initialize", nameTable.getFullName(declaringClass));
-      ITypeBinding voidType = typeEnv.resolveJavaType("void");
+      TypeMirror voidType = typeUtil.getVoid();
       FunctionElement initElement = new FunctionElement(initName, voidType, declaringClass);
       FunctionInvocation initCall = new FunctionInvocation(initElement, voidType);
       function.getBody().addStatement(0, new ExpressionStatement(initCall));
-    }
-
-    if (!BindingUtil.isStatic(m)) {
+    } else {
       FunctionConverter.convert(function);
     }
 
@@ -422,15 +457,14 @@ public class Functionizer extends UnitTreeVisitor {
   private FunctionDeclaration makeAllocatingConstructor(
       MethodDeclaration method, boolean releasing) {
     assert method.isConstructor();
-    IMethodBinding binding = method.getMethodBinding();
     ExecutableElement element = method.getExecutableElement();
-    ITypeBinding declaringClass = binding.getDeclaringClass();
+    TypeElement declaringClass = ElementUtil.getDeclaringClass(element);
 
     String name = releasing ? nameTable.getReleasingConstructorName(element)
         : nameTable.getAllocatingConstructorName(element);
-    FunctionDeclaration function = new FunctionDeclaration(name, declaringClass);
-    function.setLineNumber(method.getName().getLineNumber());
-    function.setModifiers(BindingUtil.isPrivate(binding) ? Modifier.PRIVATE : Modifier.PUBLIC);
+    FunctionDeclaration function = new FunctionDeclaration(name, declaringClass.asType());
+    function.setLineNumber(method.getLineNumber());
+    function.setModifiers(ElementUtil.isPrivate(element) ? Modifier.PRIVATE : Modifier.PUBLIC);
     function.setReturnsRetained(!releasing);
     TreeUtil.copyList(method.getParameters(), function.getParameters());
     Block body = new Block();
@@ -440,7 +474,7 @@ public class Functionizer extends UnitTreeVisitor {
     sb.append(nameTable.getFullName(declaringClass));
     sb.append(", ").append(nameTable.getFunctionName(element));
     for (SingleVariableDeclaration param : function.getParameters()) {
-      sb.append(", ").append(nameTable.getVariableQualifiedName(param.getVariableBinding()));
+      sb.append(", ").append(nameTable.getVariableQualifiedName(param.getVariableElement()));
     }
     sb.append(")");
     body.addStatement(new NativeStatement(sb.toString()));
@@ -451,29 +485,87 @@ public class Functionizer extends UnitTreeVisitor {
   /**
    *  Replace method block statements with single statement that invokes function.
    */
-  private void setFunctionCaller(MethodDeclaration method, IMethodBinding methodBinding) {
-    ITypeBinding returnType = methodBinding.getReturnType();
-    ITypeBinding declaringClass = methodBinding.getDeclaringClass();
+  private void setFunctionCaller(MethodDeclaration method, ExecutableElement methodElement) {
+    TypeMirror returnType = methodElement.getReturnType();
+    TypeElement declaringClass = ElementUtil.getDeclaringClass(methodElement);
     Block body = new Block();
     method.setBody(body);
     method.removeModifiers(Modifier.NATIVE);
     List<Statement> stmts = body.getStatements();
-    FunctionInvocation invocation = new FunctionInvocation(
-        newFunctionElement(BindingConverter.getExecutableElement(methodBinding)), returnType);
+    FunctionInvocation invocation =
+        new FunctionInvocation(newFunctionElement(methodElement), returnType);
     List<Expression> args = invocation.getArguments();
-    if (!BindingUtil.isStatic(methodBinding)) {
-      args.add(new ThisExpression(methodBinding.getDeclaringClass()));
+    if (!ElementUtil.isStatic(methodElement)) {
+      args.add(new ThisExpression(declaringClass.asType()));
     }
     for (SingleVariableDeclaration param : method.getParameters()) {
-      args.add(new SimpleName(param.getVariableBinding()));
+      args.add(new SimpleName(param.getVariableElement()));
     }
-    if (BindingUtil.isVoid(returnType)) {
+    if (TypeUtil.isVoid(returnType)) {
       stmts.add(new ExpressionStatement(invocation));
-      if (methodBinding.isConstructor()) {
-        stmts.add(new ReturnStatement(new ThisExpression(declaringClass)));
+      if (ElementUtil.isConstructor(methodElement)) {
+        stmts.add(new ReturnStatement(new ThisExpression(declaringClass.asType())));
       }
     } else {
       stmts.add(new ReturnStatement(invocation));
+    }
+  }
+
+  @Override
+  public void endVisit(TypeDeclaration node) {
+    if (!node.isInterface() && options.disallowInheritedConstructors()) {
+      addDisallowedConstructors(node);
+    }
+  }
+
+  /**
+   * Declare any inherited constructors that aren't allowed to be accessed in Java
+   * with a NS_UNAVAILABLE macro, so that clang will flag such access from native
+   * code as an error.
+   */
+  private void addDisallowedConstructors(TypeDeclaration node) {
+    TypeElement typeElement = node.getTypeElement();
+    TypeElement superClass = ElementUtil.getSuperclass(typeElement);
+    if (ElementUtil.isPrivateInnerType(typeElement) || ElementUtil.isAbstract(typeElement)
+        || superClass == null
+        // If we're not emitting constructors we don't need to disallow anything unless our
+        // superclass is NSObject.
+        || (!options.emitWrapperMethods()
+            && typeUtil.getObjcClass(superClass) != TypeUtil.NS_OBJECT)) {
+      return;
+    }
+    Map<String, ExecutableElement> inheritedConstructors = new HashMap<>();
+    // Add super constructors that have unique parameter lists.
+    for (ExecutableElement superC : ElementUtil.getConstructors(superClass)) {
+      if (ElementUtil.isPrivate(superC)) {
+        // Skip private super constructors since they're already unavailable.
+        continue;
+      }
+      String selector = nameTable.getMethodSelector(superC);
+      inheritedConstructors.put(selector, superC);
+    }
+    // Don't disallow this class' constructors if we're emitting wrapper methods.
+    if (options.emitWrapperMethods()) {
+      for (ExecutableElement constructor : ElementUtil.getConstructors(typeElement)) {
+        inheritedConstructors.remove(nameTable.getMethodSelector(constructor));
+      }
+    }
+    for (Map.Entry<String, ExecutableElement> entry : inheritedConstructors.entrySet()) {
+      ExecutableElement oldConstructor = entry.getValue();
+      GeneratedExecutableElement newConstructor =
+          GeneratedExecutableElement.newConstructorWithSelector(
+              entry.getKey(), typeElement, typeUtil);
+      MethodDeclaration decl = new MethodDeclaration(newConstructor).setUnavailable(true);
+      decl.addModifiers(Modifier.ABSTRACT);
+      int count = 0;
+      for (VariableElement param : oldConstructor.getParameters()) {
+        VariableElement newParam = GeneratedVariableElement.newParameter(
+            "arg" + count++, param.asType(), newConstructor);
+        newConstructor.addParameter(newParam);
+        decl.addParameter(new SingleVariableDeclaration(newParam));
+      }
+      addImplicitParameters(decl, ElementUtil.getDeclaringClass(oldConstructor));
+      node.addBodyDeclaration(decl);
     }
   }
 
@@ -482,14 +574,13 @@ public class Functionizer extends UnitTreeVisitor {
    */
   private static class FunctionConverter extends TreeVisitor {
 
-    private final IVariableBinding selfParam;
+    private final VariableElement selfParam;
 
     static void convert(FunctionDeclaration function) {
-      IVariableBinding selfParam = function.getParameter(0).getVariableBinding();
-      function.accept(new FunctionConverter(selfParam));
+      function.accept(new FunctionConverter(function.getParameter(0).getVariableElement()));
     }
 
-    private FunctionConverter(IVariableBinding selfParam) {
+    private FunctionConverter(VariableElement selfParam) {
       this.selfParam = selfParam;
     }
 
@@ -508,9 +599,9 @@ public class Functionizer extends UnitTreeVisitor {
     @Override
     public void endVisit(SimpleName node) {
       VariableElement var = TreeUtil.getVariableElement(node);
-      if (var != null && ElementUtil.isField(var)) {
+      if (var != null && var.getKind().isField()) {
         // Convert name to self->name.
-        node.replaceWith(new QualifiedName(var, new SimpleName(selfParam)));
+        node.replaceWith(new QualifiedName(var, node.getTypeMirror(), new SimpleName(selfParam)));
       }
     }
 
@@ -518,8 +609,7 @@ public class Functionizer extends UnitTreeVisitor {
     public boolean visit(SuperFieldAccess node) {
       // Change super.field expression to self.field.
       SimpleName qualifier = new SimpleName(selfParam);
-      FieldAccess newAccess = new FieldAccess(node.getVariableElement(), qualifier);
-      node.replaceWith(newAccess);
+      node.replaceWith(new FieldAccess(node.getVariableElement(), node.getTypeMirror(), qualifier));
       return false;
     }
 
@@ -537,5 +627,20 @@ public class Functionizer extends UnitTreeVisitor {
         node.setReceiver(new SimpleName(selfParam));
       }
     }
+  }
+
+  @Override
+  public boolean visit(AnnotationTypeDeclaration node) {
+    return false;
+  }
+
+  @Override
+  public boolean visit(NormalAnnotation node) {
+    return false;
+  }
+
+  @Override
+  public boolean visit(SingleMemberAnnotation node) {
+    return false;
   }
 }

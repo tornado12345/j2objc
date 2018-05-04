@@ -55,6 +55,7 @@ typedef union {
 #define CGPValueField_Bool valueBool
 #define CGPValueField_Enum valueId
 #define CGPValueField_Retainable valueId
+#define CGPValueField_Id valueId
 
 typedef NS_OPTIONS(uint32_t, CGPMessageFlags) {
   CGPMessageFlagExtendable = 1 << 0,
@@ -66,6 +67,7 @@ typedef NS_OPTIONS(uint32_t, CGPFieldFlags) {
   CGPFieldFlagRepeated = 1 << 1,
   CGPFieldFlagExtension = 1 << 2,
   CGPFieldFlagPacked = 1 << 3,
+  CGPFieldFlagMap = 1 << 4,
 };
 
 typedef struct CGPFieldData {
@@ -77,10 +79,21 @@ typedef struct CGPFieldData {
   CGPValue defaultValue;
   uint32_t hasBitIndex;
   uint32_t offset;
-  const char *className;
+  union {
+    Class objcType;
+    struct CGPFieldData *mapEntryFields;
+  };
   const char *containingType;
   const char *optionsData;
 } CGPFieldData;
+
+typedef struct CGPOneofData {
+  const char *name;
+  const char *javaName;
+  uint32_t firstFieldIdx;
+  uint32_t fieldCount;
+  uint32_t offset;
+} CGPOneofData;
 
 @interface ComGoogleProtobufDescriptors_Descriptor () {
  @package
@@ -89,14 +102,15 @@ typedef struct CGPFieldData {
   CGPMessageFlags flags_;
   size_t storageSize_;
   IOSObjectArray *fields_;
+  IOSObjectArray *serializationOrderFields_;
+  IOSObjectArray *oneofs_;
   ComGoogleProtobufGeneratedMessage *defaultInstance_;
 }
 
 - (instancetype)initWithMessageClass:(Class)messageClass
                         builderClass:(Class)builderClass
                                flags:(CGPMessageFlags)flags
-                         storageSize:(size_t)storageSize
-                              fields:(IOSObjectArray *)fields;
+                         storageSize:(size_t)storageSize;
 
 @end
 
@@ -108,9 +122,12 @@ typedef struct CGPFieldData {
   // Either nil, a Descriptor or a EnumDescriptor depending on the field type.
   id valueType_;
   ComGoogleProtobufDescriptorProtos_FieldOptions *fieldOptions_;
+  CGPDescriptor *containingType_;
+  CGPOneofDescriptor *containingOneof_;
 }
 
-- (instancetype)initWithData:(CGPFieldData *)data;
+- (instancetype)initWithData:(CGPFieldData *)data
+              containingType:(CGPDescriptor *)containingType;
 
 @end
 
@@ -131,6 +148,17 @@ typedef struct CGPFieldData {
 }
 @end
 
+@interface ComGoogleProtobufDescriptors_OneofDescriptor () {
+ @package
+  CGPOneofData *data_;
+  CGPDescriptor *containingType_;
+}
+
+- (instancetype)initWithData:(CGPOneofData *)data
+              containingType:(CGPDescriptor *)containingType;
+
+@end
+
 // Functions that convert a value from its field storage type to the type
 // expected by a reflection accessor. (accessing with a descriptor)
 // For enums, the reflection type is a EnumValueDescriptor.
@@ -145,9 +173,13 @@ typedef struct CGPFieldData {
 
 CF_EXTERN_C_BEGIN
 
-void CGPInitDescriptor(
-    CGPDescriptor **pDescriptor, Class messageClass, Class builderClass, CGPMessageFlags flags,
-    size_t storageSize, jint fieldCount, CGPFieldData *fieldData);
+CGPDescriptor *CGPInitDescriptor(
+    Class messageClass, Class builderClass, CGPMessageFlags flags,
+    size_t storageSize);
+
+void CGPInitFields(
+    CGPDescriptor *descriptor, jint fieldCount, CGPFieldData *fieldData,
+    jint oneofCount, CGPOneofData *oneofData);
 
 CGP_ALWAYS_INLINE inline BOOL CGPIsExtendable(const CGPDescriptor *descriptor) {
   return descriptor->flags_ & CGPMessageFlagExtendable;
@@ -157,11 +189,15 @@ CGP_ALWAYS_INLINE inline BOOL CGPIsMessageSetWireFormat(const CGPDescriptor *des
   return descriptor->flags_ & CGPMessageFlagMessageSetWireFormat;
 }
 
+IOSObjectArray *CGPGetSerializationOrderFields(CGPDescriptor *descriptor);
+
 CGPEnumDescriptor *CGPInitializeEnumType(
     Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufProtocolMessageEnum> **values,
     NSString **names, jint *intValues);
 
-void CGPFieldFixDefaultValue(CGPFieldDescriptor *descriptor);
+void CGPInitializeOneofCaseEnum(
+    Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufInternal_EnumLite> **values,
+    NSString **names, jint *intValues);
 
 CGP_ALWAYS_INLINE inline jint CGPFieldGetNumber(const CGPFieldDescriptor *field) {
   return field->data_->number;
@@ -173,6 +209,18 @@ CGP_ALWAYS_INLINE inline BOOL CGPFieldIsRequired(const CGPFieldDescriptor *field
 
 CGP_ALWAYS_INLINE inline BOOL CGPFieldIsRepeated(const CGPFieldDescriptor *field) {
   return field->data_->flags & CGPFieldFlagRepeated;
+}
+
+CGP_ALWAYS_INLINE inline BOOL CGPFieldIsMap(const CGPFieldDescriptor *field) {
+  return field->data_->flags & CGPFieldFlagMap;
+}
+
+CGP_ALWAYS_INLINE inline CGPFieldDescriptor *CGPFieldMapKey(const CGPFieldDescriptor *field) {
+  return ((CGPDescriptor *)field->valueType_)->fields_->buffer_[0];
+}
+
+CGP_ALWAYS_INLINE inline CGPFieldDescriptor *CGPFieldMapValue(const CGPFieldDescriptor *field) {
+  return ((CGPDescriptor *)field->valueType_)->fields_->buffer_[1];
 }
 
 CGP_ALWAYS_INLINE inline BOOL CGPFieldIsPacked(const CGPFieldDescriptor *field) {
@@ -211,9 +259,13 @@ CGP_ALWAYS_INLINE inline jint CGPEnumGetIntValue(CGPEnumDescriptor *descriptor, 
   return *(jint *)((char *)enumObj + descriptor->valueOffset_);
 }
 
-CGPDescriptor *CGPFieldGetContainingType(CGPFieldDescriptor *field);
-
 id CGPFieldGetDefaultValue(CGPFieldDescriptor *field);
+
+Class<ComGoogleProtobufInternal_EnumLite> CGPOneofGetCaseClass(CGPOneofDescriptor *oneof);
+
+CGP_ALWAYS_INLINE inline uint32_t CGPOneofGetOffset(const CGPOneofDescriptor *oneof, Class cls) {
+  return (uint32_t)class_getInstanceSize(cls) + oneof->data_->offset;
+}
 
 BOOL CGPIsRetainedType(CGPFieldJavaType type);
 

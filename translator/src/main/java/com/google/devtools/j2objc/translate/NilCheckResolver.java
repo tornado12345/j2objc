@@ -82,6 +82,11 @@ import javax.lang.model.type.TypeMirror;
  */
 public class NilCheckResolver extends UnitTreeVisitor {
 
+  private static final FunctionElement NIL_CHK_ELEM =
+      new FunctionElement("nil_chk", TypeUtil.ID_TYPE, null)
+          .addParameters(TypeUtil.ID_TYPE)
+          .setIsMacro(true);
+
   // Contains the set of "safe" variables that don't need nil checks. A new
   // Scope is added to the stack when entering conditionally executed code such
   // as if-statements, loops, conditional operators (&&, ||).
@@ -365,7 +370,7 @@ public class NilCheckResolver extends UnitTreeVisitor {
   private boolean isBoxingMethod(ExecutableElement method) {
     TypeElement declaringClass = ElementUtil.getDeclaringClass(method);
     // Autoboxing methods.
-    if (typeEnv.isBoxedPrimitive(declaringClass)) {
+    if (typeUtil.isBoxedType(declaringClass.asType())) {
       String name = ElementUtil.getName(method);
       TypeMirror returnType = method.getReturnType();
       List<? extends VariableElement> params = method.getParameters();
@@ -414,9 +419,8 @@ public class NilCheckResolver extends UnitTreeVisitor {
     if (var != null) {
       addSafeVar(var);
     }
-    TypeMirror idType = typeEnv.getIdTypeMirror();
-    FunctionElement element = new FunctionElement("nil_chk", idType, null).addParameters(idType);
-    FunctionInvocation nilChkInvocation = new FunctionInvocation(element, node.getTypeMirror());
+    FunctionInvocation nilChkInvocation =
+        new FunctionInvocation(NIL_CHK_ELEM, node.getTypeMirror());
     node.replaceWith(nilChkInvocation);
     nilChkInvocation.addArgument(node);
   }
@@ -738,6 +742,7 @@ public class NilCheckResolver extends UnitTreeVisitor {
     pushScope();
     for (CatchClause catchClause : node.getCatchClauses()) {
       scope.mergeDownAndReset();
+      addSafeVar(catchClause.getException().getVariableElement());
       catchClause.accept(this);
     }
     popAndMerge();
@@ -750,6 +755,7 @@ public class NilCheckResolver extends UnitTreeVisitor {
 
   @Override
   public void endVisit(ThrowStatement node) {
+    addNilCheck(node.getExpression());
     handleThrows();
     scope.terminates = true;
   }
@@ -812,7 +818,7 @@ public class NilCheckResolver extends UnitTreeVisitor {
   // added nil_chk's.
   @Override
   public void endVisit(FunctionInvocation node) {
-    if (node.getName().equals("nil_chk")) {
+    if (node.getFunctionElement() == NIL_CHK_ELEM) {
       VariableElement var = TreeUtil.getVariableElement(node.getArgument(0));
       if (var != null) {
         addSafeVar(var);

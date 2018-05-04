@@ -28,8 +28,6 @@ import com.google.devtools.j2objc.ast.Expression;
 import com.google.devtools.j2objc.ast.FieldAccess;
 import com.google.devtools.j2objc.ast.FunctionInvocation;
 import com.google.devtools.j2objc.ast.InfixExpression;
-import com.google.devtools.j2objc.ast.MethodInvocation;
-import com.google.devtools.j2objc.ast.NullLiteral;
 import com.google.devtools.j2objc.ast.PackageDeclaration;
 import com.google.devtools.j2objc.ast.ParenthesizedExpression;
 import com.google.devtools.j2objc.ast.PostfixExpression;
@@ -37,105 +35,124 @@ import com.google.devtools.j2objc.ast.PrefixExpression;
 import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.TreeNode;
 import com.google.devtools.j2objc.ast.TreeUtil;
-import com.google.devtools.j2objc.ast.Type;
 import com.google.devtools.j2objc.ast.TypeDeclaration;
 import com.google.devtools.j2objc.ast.TypeLiteral;
 import com.google.devtools.j2objc.types.FunctionElement;
-import com.google.devtools.j2objc.types.IOSMethodBinding;
-import com.google.devtools.j2objc.types.Types;
 import com.google.j2objc.annotations.ReflectionSupport;
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
 
 /**
  * General collection of utility methods.
  *
- * @author Keith Stanger
+ * @author Keith Stanger, Tom Ball
  */
 public final class TranslationUtil {
 
-  private final Types typeEnv;
+  private final TypeUtil typeUtil;
   private final NameTable nameTable;
+  private final Options options;
+  private final ElementUtil elementUtil;
+  private final URLClassLoader jreEmulLoader;
 
-  public TranslationUtil(Types typeEnv, NameTable nameTable) {
-    this.typeEnv = typeEnv;
+  public TranslationUtil(TypeUtil typeUtil, NameTable nameTable, Options options,
+      ElementUtil elementUtil) {
+    this.typeUtil = typeUtil;
     this.nameTable = nameTable;
+    this.options = options;
+    this.elementUtil = elementUtil;
+    this.jreEmulLoader = getJreEmulClassPath(options);
+    
   }
 
-  public static ITypeBinding getSuperType(AbstractTypeDeclaration node) {
+  public static TypeElement getSuperType(AbstractTypeDeclaration node) {
     // Use the AST as the source of truth where possible.
     if (node instanceof TypeDeclaration) {
-      Type superType = ((TypeDeclaration) node).getSuperclassType();
-      if (superType != null) {
-        return superType.getTypeBinding();
-      }
-      return null;
+      TypeMirror superclassTypeMirror = ((TypeDeclaration) node).getSuperclassTypeMirror();
+      return superclassTypeMirror == null ? null : TypeUtil.asTypeElement(superclassTypeMirror);
     } else {
-      return node.getTypeBinding().getSuperclass();
+      return ElementUtil.getSuperclass(node.getTypeElement());
     }
   }
 
-  public static List<ITypeBinding> getInterfaceTypes(AbstractTypeDeclaration node) {
+  public static List<TypeElement> getInterfaceTypes(AbstractTypeDeclaration node) {
     // Use the AST as the source of truth where possible.
-    List<Type> astInterfaces = null;
+    List<? extends TypeMirror> astInterfaces = null;
     if (node instanceof TypeDeclaration) {
-      astInterfaces = ((TypeDeclaration) node).getSuperInterfaceTypes();
+      astInterfaces = ((TypeDeclaration) node).getSuperInterfaceTypeMirrors();
     } else if (node instanceof EnumDeclaration) {
-      astInterfaces = ((EnumDeclaration) node).getSuperInterfaceTypes();
+      astInterfaces = ((EnumDeclaration) node).getSuperInterfaceTypeMirrors();
+    } else {  // AnnotationTypeDeclaration
+      return ElementUtil.getInterfaces(node.getTypeElement());
     }
-    if (astInterfaces == null) {  // AnnotationTypeDeclaration
-      return Arrays.asList(node.getTypeBinding().getInterfaces());
-    }
-    List<ITypeBinding> result = new ArrayList<>();
-    for (Type type : astInterfaces) {
-      result.add(type.getTypeBinding());
+
+    List<TypeElement> result = new ArrayList<>();
+    for (TypeMirror typeMirror : astInterfaces) {
+      result.add(TypeUtil.asTypeElement(typeMirror));
     }
     return result;
   }
 
-  public static boolean needsReflection(AbstractTypeDeclaration node) {
+  public boolean needsReflection(AbstractTypeDeclaration node) {
     return needsReflection(node.getTypeElement());
   }
 
-  public static boolean needsReflection(PackageDeclaration node) {
-    return needsReflection(getReflectionSupportLevel(
-        ElementUtil.getAnnotation(node.getPackageElement(), ReflectionSupport.class)));
+  public boolean needsReflection(PackageDeclaration node) {
+    ReflectionSupport.Level level = getReflectionSupportLevelOnPackage(node.getPackageElement());
+    return needsReflection(level);
   }
 
-  public static boolean needsReflection(TypeElement type) {
+  public boolean needsReflection(TypeElement type) {
     if (ElementUtil.isLambda(type)) {
       return false;
     }
+    PackageElement packageElement = ElementUtil.getPackage(type);
+    ReflectionSupport.Level level = null;
     while (type != null) {
-      ReflectionSupport.Level level = getReflectionSupportLevel(
-          ElementUtil.getAnnotation(type, ReflectionSupport.class));
+      level = getReflectionSupportLevel(ElementUtil.getAnnotation(type, ReflectionSupport.class));
       if (level != null) {
         return level == ReflectionSupport.Level.FULL;
       }
       type = ElementUtil.getDeclaringClass(type);
     }
-    return !Options.stripReflection();
+    // Check package level annotations
+    level = getReflectionSupportLevelOnPackage(packageElement);
+
+    return needsReflection(level);
   }
 
-  private static boolean needsReflection(ReflectionSupport.Level level) {
+  private boolean needsReflection(ReflectionSupport.Level level) {
     if (level != null) {
       return level == ReflectionSupport.Level.FULL;
     } else {
-      return !Options.stripReflection();
+      return !options.stripReflection();
     }
+  }
+
+  private ReflectionSupport.Level getReflectionSupportLevelOnPackage(PackageElement node) {
+    ReflectionSupport.Level level = getReflectionSupportLevel(
+        ElementUtil.getAnnotation(node, ReflectionSupport.class));
+    if (level != null) {
+      return level;
+    }
+    // Check if package-info.java contains ReflectionSupport annotation
+    level = options.getPackageInfoLookup().getReflectionSupportLevel(
+        node.getSimpleName().toString());
+    return level;
   }
 
   public static ReflectionSupport.Level getReflectionSupportLevel(
@@ -169,16 +186,6 @@ public final class TranslationUtil {
         if (invocation.getFunctionElement().getRetainedResultName() != null) {
           invocation.setHasRetainedResult(true);
           return TreeUtil.remove(node);
-        }
-        return null;
-      }
-      case METHOD_INVOCATION: {
-        MethodInvocation invocation = (MethodInvocation) node;
-        Expression expr = invocation.getExpression();
-        IMethodBinding method = invocation.getMethodBinding();
-        if (expr != null && method instanceof IOSMethodBinding
-            && ((IOSMethodBinding) method).getSelector().equals(NameTable.AUTORELEASE_METHOD)) {
-          return TreeUtil.remove(expr);
         }
         return null;
       }
@@ -217,8 +224,8 @@ public final class TranslationUtil {
    * would be unsafe to prune the given node from the tree.
    */
   public static boolean hasSideEffect(Expression expr) {
-    IVariableBinding var = TreeUtil.getVariableBinding(expr);
-    if (var != null && BindingUtil.isVolatile(var)) {
+    VariableElement var = TreeUtil.getVariableElement(expr);
+    if (var != null && ElementUtil.isVolatile(var)) {
       return true;
     }
     switch (expr.getKind()) {
@@ -271,18 +278,18 @@ public final class TranslationUtil {
    * "Strong" if the lhs is a field with a strong reference, and an empty string
    * for local variables and weak fields.
    */
-  public static String getOperatorFunctionModifier(Expression expr) {
-    IVariableBinding var = TreeUtil.getVariableBinding(expr);
+  public String getOperatorFunctionModifier(Expression expr) {
+    VariableElement var = TreeUtil.getVariableElement(expr);
     if (var == null) {
       assert TreeUtil.trimParentheses(expr) instanceof ArrayAccess
           : "Expression cannot be resolved to a variable or array access.";
       return "Array";
     }
     String modifier = "";
-    if (BindingUtil.isVolatile(var)) {
+    if (ElementUtil.isVolatile(var)) {
       modifier += "Volatile";
     }
-    if (!BindingUtil.isWeakReference(var) && (var.isField() || Options.useARC())) {
+    if (!ElementUtil.isWeakReference(var) && (var.getKind().isField() || options.useARC())) {
       modifier += "Strong";
     }
     return modifier;
@@ -290,13 +297,11 @@ public final class TranslationUtil {
 
   public Expression createObjectArray(List<Expression> expressions, ArrayType arrayType) {
     if (expressions.isEmpty()) {
-      return new ArrayCreation(arrayType, typeEnv, 0);
+      return new ArrayCreation(arrayType, typeUtil, 0);
     }
-    ArrayCreation creation = new ArrayCreation(arrayType, typeEnv);
     ArrayInitializer initializer = new ArrayInitializer(arrayType);
     initializer.getExpressions().addAll(expressions);
-    creation.setInitializer(initializer);
-    return creation;
+    return new ArrayCreation(initializer);
   }
 
   public Expression createAnnotation(AnnotationMirror annotationMirror) {
@@ -306,7 +311,7 @@ public final class TranslationUtil {
         new FunctionElement("create_" + nameTable.getFullName(typeElem), type, typeElem);
     FunctionInvocation invocation = new FunctionInvocation(element, type);
     Map<? extends ExecutableElement, ? extends AnnotationValue> values =
-        annotationMirror.getElementValues();
+        typeUtil.elementUtil().getElementValuesWithDefaults(annotationMirror);
     for (ExecutableElement member : ElementUtil.getSortedAnnotationMembers(typeElem)) {
       TypeMirror valueType = member.getReturnType();
       element.addParameters(valueType);
@@ -317,9 +322,7 @@ public final class TranslationUtil {
 
   public Expression createAnnotationValue(TypeMirror type, AnnotationValue aValue) {
     Object value = aValue.getValue();
-    if (value == null) {
-      return new NullLiteral();
-    } else if (value instanceof VariableElement) {
+    if (value instanceof VariableElement) {
       return new SimpleName((VariableElement) value);
     } else if (TypeUtil.isArray(type)) {
       assert value instanceof List;
@@ -335,9 +338,47 @@ public final class TranslationUtil {
       assert value instanceof AnnotationMirror;
       return createAnnotation((AnnotationMirror) value);
     } else if (value instanceof TypeMirror) {
-      return new TypeLiteral((TypeMirror) value, typeEnv);
+      return new TypeLiteral((TypeMirror) value, typeUtil);
     } else {  // Boolean, Character, Number, String
-      return TreeUtil.newLiteral(value, typeEnv);
+      return TreeUtil.newLiteral(value, typeUtil);
     }
+  }
+
+  /**
+   * Returns true if an implementation for a type element should be generated.
+   * Normally this is true, but in Java 8 a few interfaces from JSR 250
+   * (https://jcp.org/en/jsr/detail?id=250) were added, causing duplicate
+   * symbol link errors when building an app that uses the other JSR 250
+   * annotations. javax.annotation defined on the bootclasspath are therefore
+   * ignored, since translating them won't cause link errors later.
+   * <p>
+   * If the <code>-Xtranslate-bootclasspath</code> flag is specified
+   * (normally only when building the jre_emul libraries), then types
+   * are always generated.
+   */
+  public boolean generateImplementation(TypeElement typeElement) {
+    if (options.translateBootclasspathFiles()) {
+      return true;
+    }
+    String className = elementUtil.getBinaryName(typeElement).replace('.', '/');
+    if (!className.startsWith("javax/annotation/")) {
+      return true;
+    }
+    String resourcePath = className.replace('.', '/') + ".class";
+    return jreEmulLoader.findResource(resourcePath) == null;
+  }
+
+  private URLClassLoader getJreEmulClassPath(Options options) {
+    List<URL> bootURLs = new ArrayList<>();
+    for (String path : options.getBootClasspath()) {
+      if (path.matches("^.*jre_emul.*jar$")) {
+        try {
+          bootURLs.add(new File(path).toURI().toURL());
+        } catch (MalformedURLException e) {
+          // Ignore bad path.
+        }
+      }
+    }
+    return new URLClassLoader(bootURLs.toArray(new URL[0]));
   }
 }

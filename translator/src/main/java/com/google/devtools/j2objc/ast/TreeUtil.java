@@ -19,14 +19,10 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.devtools.j2objc.jdt.BindingConverter;
-import com.google.devtools.j2objc.types.Types;
 import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.TypeUtil;
 import java.io.File;
 import java.util.AbstractList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import javax.lang.model.element.Element;
@@ -34,9 +30,6 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.ITypeBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
 
 /**
  * Collection of utility methods for examining tree nodes.
@@ -141,15 +134,17 @@ public class TreeUtil {
     return getNearestAncestorWithType(MethodDeclaration.class, node);
   }
 
-  /**
-   * With lambdas and methodbindings, the return type of the method binding does not necessarily
-   * match the return type of the functional interface, which enforces the type contracts. To get
-   * the return type of a lambda or method binding, we need the return type of the functional
-   * interface.
-   */
+  private static final ImmutableList<Class<?>> EXECUTABLE_DECLARATION_TYPES =
+      ImmutableList.of(MethodDeclaration.class, FunctionDeclaration.class);
+
   public static TypeMirror getOwningReturnType(TreeNode node) {
-    MethodDeclaration enclosingMethod = getEnclosingMethod(node);
-    return enclosingMethod == null ? null : enclosingMethod.getExecutableElement().getReturnType();
+    TreeNode enclosingNode = getNearestAncestorWithTypeOneOf(EXECUTABLE_DECLARATION_TYPES, node);
+    if (enclosingNode instanceof MethodDeclaration) {
+      return ((MethodDeclaration) enclosingNode).getExecutableElement().getReturnType();
+    } else if (enclosingNode instanceof FunctionDeclaration) {
+      return ((FunctionDeclaration) enclosingNode).getReturnType().getTypeMirror();
+    }
+    return null;
   }
 
   /**
@@ -202,7 +197,7 @@ public class TreeUtil {
     };
   }
 
-  public static Iterable<MethodDeclaration> getMethodDeclarations(CommonTypeDeclaration node) {
+  public static Iterable<MethodDeclaration> getMethodDeclarations(AbstractTypeDeclaration node) {
     return getMethodDeclarations(node.getBodyDeclarations());
   }
 
@@ -210,7 +205,7 @@ public class TreeUtil {
     return Iterables.filter(nodes, MethodDeclaration.class);
   }
 
-  public static List<MethodDeclaration> getMethodDeclarationsList(CommonTypeDeclaration node) {
+  public static List<MethodDeclaration> getMethodDeclarationsList(AbstractTypeDeclaration node) {
     return Lists.newArrayList(getMethodDeclarations(node));
   }
 
@@ -221,7 +216,7 @@ public class TreeUtil {
 
   public static List<BodyDeclaration> asDeclarationSublist(BodyDeclaration node) {
     List<BodyDeclaration> declarations =
-        ((CommonTypeDeclaration) node.getParent()).getBodyDeclarations();
+        ((AbstractTypeDeclaration) node.getParent()).getBodyDeclarations();
     int index = declarations.indexOf(node);
     assert index != -1;
     return declarations.subList(index, index + 1);
@@ -231,8 +226,8 @@ public class TreeUtil {
    * Gets the element that is declared by this node.
    */
   public static Element getDeclaredElement(TreeNode node) {
-    if (node instanceof CommonTypeDeclaration) {
-      return ((CommonTypeDeclaration) node).getTypeElement();
+    if (node instanceof AbstractTypeDeclaration) {
+      return ((AbstractTypeDeclaration) node).getTypeElement();
     } else if (node instanceof MethodDeclaration) {
       return ((MethodDeclaration) node).getExecutableElement();
     } else if (node instanceof VariableDeclaration) {
@@ -242,13 +237,9 @@ public class TreeUtil {
   }
 
   /**
-   * Gets a variable binding for the given expression if the expression
+   * Gets a variable element for the given expression if the expression
    * represents a variable. Returns null otherwise.
    */
-  public static IVariableBinding getVariableBinding(Expression node) {
-    return BindingConverter.unwrapVariableElement(getVariableElement(node));
-  }
-
   public static VariableElement getVariableElement(Expression node) {
     node = trimParentheses(node);
     switch (node.getKind()) {
@@ -264,19 +255,9 @@ public class TreeUtil {
     }
   }
 
-  public static IVariableBinding getVariableBinding(Name node) {
-    Element element = node.getElement();
-    return element != null && ElementUtil.isVariable(element)
-        ? (IVariableBinding) BindingConverter.unwrapElement(element) : null;
-  }
-
   public static VariableElement getVariableElement(Name node) {
     Element element = node.getElement();
     return element != null && ElementUtil.isVariable(element) ? (VariableElement) element : null;
-  }
-
-  public static IMethodBinding getMethodBinding(Expression node) {
-    return BindingConverter.unwrapExecutableElement(getExecutableElement(node));
   }
 
   public static ExecutableElement getExecutableElement(Expression node) {
@@ -292,12 +273,8 @@ public class TreeUtil {
     }
   }
 
-  public static CommonTypeDeclaration getEnclosingType(TreeNode node) {
-    return getNearestAncestorWithType(CommonTypeDeclaration.class, node);
-  }
-
-  public static ITypeBinding getEnclosingTypeBinding(TreeNode node) {
-    return BindingConverter.unwrapTypeElement(getEnclosingTypeElement(node));
+  public static AbstractTypeDeclaration getEnclosingType(TreeNode node) {
+    return getNearestAncestorWithType(AbstractTypeDeclaration.class, node);
   }
 
   public static TypeElement getEnclosingTypeElement(TreeNode node) {
@@ -308,13 +285,9 @@ public class TreeUtil {
     return getEnclosingType(node).getBodyDeclarations();
   }
 
-  public static IMethodBinding getEnclosingMethodBinding(TreeNode node) {
-    MethodDeclaration enclosingMethod = getNearestAncestorWithType(MethodDeclaration.class, node);
-    return enclosingMethod == null ? null : enclosingMethod.getMethodBinding();
-  }
-
-  private static final List<Class<?>> NODE_TYPES_WITH_ELEMENTS = ImmutableList.of(
-      CommonTypeDeclaration.class, MethodDeclaration.class, VariableDeclaration.class);
+  private static final ImmutableList<Class<?>> NODE_TYPES_WITH_ELEMENTS =
+      ImmutableList.of(
+          AbstractTypeDeclaration.class, MethodDeclaration.class, VariableDeclaration.class);
 
   public static Element getEnclosingElement(TreeNode node) {
     return getDeclaredElement(getNearestAncestorWithTypeOneOf(NODE_TYPES_WITH_ELEMENTS, node));
@@ -419,54 +392,27 @@ public class TreeUtil {
     asStatementList(node).add(0, toInsert);
   }
 
-  public static Expression newLiteral(Object value, Types typeEnv) {
-    if (value instanceof Boolean) {
-      return new BooleanLiteral((Boolean) value, typeEnv);
+  public static Expression newLiteral(Object value, TypeUtil typeUtil) {
+    if (value == null) {
+      return new NullLiteral(typeUtil.getNull());
+    } else if (value instanceof Boolean) {
+      return new BooleanLiteral((Boolean) value, typeUtil);
     } else if (value instanceof Character) {
-      return new CharacterLiteral((Character) value, typeEnv);
+      return new CharacterLiteral((Character) value, typeUtil);
     } else if (value instanceof Number) {
-      return new NumberLiteral((Number) value, typeEnv).setToken(value.toString());
+      String token = value.toString();
+      if (value instanceof Long) {
+        token += "L";
+      } else if (value instanceof Float) {
+        token += "F";
+      } else if (value instanceof Double) {
+        token += "D";
+      }
+      return new NumberLiteral((Number) value, typeUtil).setToken(token);
     } else if (value instanceof String) {
-      return new StringLiteral((String) value, typeEnv);
+      return new StringLiteral((String) value, typeUtil);
     }
     throw new AssertionError("unknown constant type: " + value.getClass().getName());
-  }
-
-  /**
-   * Method sorter, suitable for documentation and
-   * code-completion lists.
-   *
-   * Sort ordering: constructors first, then alphabetical by name. If they have the
-   * same name, then compare the first parameter's simple type name, then the second, etc.
-   */
-  public static void sortMethods(List<MethodDeclaration> methods) {
-    Collections.sort(methods, new Comparator<MethodDeclaration>() {
-      @Override
-      public int compare(MethodDeclaration m1, MethodDeclaration m2) {
-        if (m1.isConstructor() && !m2.isConstructor()) {
-          return -1;
-        }
-        if (!m1.isConstructor() && m2.isConstructor()) {
-          return 1;
-        }
-        String m1Name = m1.getName().getIdentifier();
-        String m2Name = m2.getName().getIdentifier();
-        if (!m1Name.equals(m2Name)) {
-          return m1Name.compareToIgnoreCase(m2Name);
-        }
-        int nParams = m1.getParameters().size();
-        int nOtherParams = m2.getParameters().size();
-        int max = Math.min(nParams, nOtherParams);
-        for (int i = 0; i < max; i++) {
-          String paramType = m1.getParameter(i).getType().getTypeBinding().getName();
-          String otherParamType = m2.getParameter(i).getType().getTypeBinding().getName();
-          if (!paramType.equals(otherParamType)) {
-            return paramType.compareToIgnoreCase(otherParamType);
-          }
-        }
-        return nParams - nOtherParams;
-      }
-    });
   }
 
   public static List<AnnotationTypeMemberDeclaration> getAnnotationMembers(

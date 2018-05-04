@@ -14,8 +14,6 @@
 
 package com.google.devtools.j2objc.ast;
 
-import org.eclipse.jdt.core.dom.ASTNode;
-
 /**
  * Base class for nodes in the J2ObjC AST.
  */
@@ -27,17 +25,6 @@ public abstract class TreeNode {
   private int lineNumber = -1;
 
   protected TreeNode() {
-  }
-
-  // TODO(tball): remove when all subclasses are converted.
-  protected TreeNode(ASTNode jdtNode) {
-    this();
-    startPosition = jdtNode.getStartPosition();
-    length = jdtNode.getLength();
-    ASTNode root = jdtNode.getRoot();
-    if (root instanceof org.eclipse.jdt.core.dom.CompilationUnit) {
-      lineNumber = ((org.eclipse.jdt.core.dom.CompilationUnit) root).getLineNumber(startPosition);
-    }
   }
 
   protected TreeNode(TreeNode other) {
@@ -95,11 +82,11 @@ public abstract class TreeNode {
         acceptInner(visitor);
       }
       visitor.postVisit(this);
-    } catch (TreeVisitorAssertionError e) {
+    } catch (TreeVisitorError e) {
       // Avoid re-wrapping.
       throw e;
-    } catch (AssertionError e) {
-      throw new TreeVisitorAssertionError(e, this);
+    } catch (Throwable t) {
+      throw new TreeVisitorError(t, this);
     }
   }
 
@@ -148,7 +135,6 @@ public abstract class TreeNode {
   public enum Kind {
     ANNOTATION_TYPE_DECLARATION,
     ANNOTATION_TYPE_MEMBER_DECLARATION,
-    ANONYMOUS_CLASS_DECLARATION,
     ARRAY_ACCESS,
     ARRAY_CREATION,
     ARRAY_INITIALIZER,

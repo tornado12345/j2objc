@@ -16,6 +16,7 @@
 
 package com.google.j2objc.annotations;
 
+import static java.lang.annotation.ElementType.LOCAL_VARIABLE;
 import static java.lang.annotation.ElementType.TYPE;
 import static java.lang.annotation.RetentionPolicy.SOURCE;
 
@@ -23,12 +24,15 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 
 /**
- * Annotation that indicates an inner class has a weak relationship
- * to its owning class.
+ * Annotation that indicates an inner class has a weak relationship to its owning class.
+ *
+ * Lambdas can be given a weak outer reference by declaring a local variable with this annotation
+ * and assigning the lambda expression directly to the local variable. WeakOuter is only allowed on
+ * local variables, not fields, to encourage the annotation to be used where the lambda is declared.
  *
  * @author Tom Ball
  */
-@Target(TYPE)
+@Target({TYPE, LOCAL_VARIABLE})
 @Retention(SOURCE)
 public @interface WeakOuter {
 }

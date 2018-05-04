@@ -16,8 +16,7 @@
 
 package com.google.devtools.j2objc;
 
-import com.google.devtools.j2objc.Options.OutputStyleOption;
-
+import com.google.devtools.j2objc.util.HeaderMap;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -42,7 +41,7 @@ public class J2ObjCTest extends GenerationTest {
   public void setUp() throws IOException {
     super.setUp();
 
-    List<String> classpathEntries = Options.getClassPathEntries();
+    List<String> classpathEntries = options.fileUtil().getClassPathEntries();
     for (String entry : getComGoogleDevtoolsJ2objcPath()) {
       classpathEntries.add(entry);
     }
@@ -56,13 +55,6 @@ public class J2ObjCTest extends GenerationTest {
         "@ObjectiveCName(\"CBT\")\n"
         + "package com.google.devtools.j2objc.util;\n"
         + "import com.google.j2objc.annotations.ObjectiveCName;", packageInfoPath);
-  }
-
-  @Override
-  public void tearDown() throws Exception {
-    Options.getClassPathEntries().clear();
-    Options.setBatchTranslateMaximum(0);
-    super.tearDown();
   }
 
   // No assertions for packageInfoH--nothing interesting in it that other tests don't assert.
@@ -105,6 +97,8 @@ public class J2ObjCTest extends GenerationTest {
     assertTranslation(exampleM, "com/google/test/Example.java");
     assertTranslation(packageInfoH, "com/google/test/package-info.java");
     assertTranslation(packageInfoM, "com/google/test/package-info.java");
+    assertNotInTranslation(packageInfoH, "J2ObjCTempDir");
+    assertNotInTranslation(packageInfoM, "J2ObjCTempDir");
     // Test the includes
     assertTranslation(exampleH, "#pragma push_macro(\"INCLUDE_ALL_ComGoogleTestExample\")");
     assertTranslation(exampleM, "#include \"com/google/test/Example.h\"");
@@ -117,13 +111,13 @@ public class J2ObjCTest extends GenerationTest {
   }
 
   public void testCompilingFromJar() throws Exception {
-    J2ObjC.run(Collections.singletonList(jarPath));
+    J2ObjC.run(Collections.singletonList(jarPath), options);
     makeAssertionsForJar();
   }
 
   public void testBatchCompilingFromJar() throws Exception {
-    Options.setBatchTranslateMaximum(2);
-    J2ObjC.run(Collections.singletonList(jarPath));
+    options.setBatchTranslateMaximum(2);
+    J2ObjC.run(Collections.singletonList(jarPath), options);
     makeAssertionsForJar();
   }
 
@@ -157,14 +151,33 @@ public class J2ObjCTest extends GenerationTest {
     makeAssertions(exampleH, exampleM, packageInfoM);
   }
 
+  private void makeAssertionsForGlobalCombinedOutputJavaFiles() throws Exception {
+    String exampleH = getTranslatedFile("testGlobalCombinedOutputFile.h");
+    String exampleM = getTranslatedFile("testGlobalCombinedOutputFile.m");
+    assertTranslation(exampleM, "#include \"testGlobalCombinedOutputFile.h\"");
+    makeAssertionsForGlobalCombinedOutputJavaFiles(exampleH, exampleM);
+  }
+
+  private void makeAssertionsForGlobalCombinedOutputJavaFiles(String exampleH, String exampleM)
+      throws Exception {
+    // Test the includes
+    assertTranslation(
+        exampleH, "#pragma push_macro(\"INCLUDE_ALL_TestGlobalCombinedOutputFile\")");
+    assertTranslation(
+        exampleM, "@interface ComGoogleDevtoolsJ2objcUtilpackage_info : NSObject");
+    assertTranslation(exampleM, "@implementation ComGoogleDevtoolsJ2objcUtilpackage_info");
+    // All other assertions
+    makeAssertions(exampleH, exampleM, exampleM);
+  }
+
   public void testCompilingFromFiles() throws Exception {
-    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath));
+    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath), options);
     makeAssertionsForJavaFiles();
   }
 
   public void testBatchCompilingFromFiles() throws Exception {
-    Options.setBatchTranslateMaximum(2);
-    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath));
+    options.setBatchTranslateMaximum(2);
+    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath), options);
     makeAssertionsForJavaFiles();
   }
 
@@ -175,14 +188,20 @@ public class J2ObjCTest extends GenerationTest {
   }
 
   public void testCombinedJar() throws Exception {
-    Options.setOutputStyle(OutputStyleOption.SOURCE_COMBINED);
-    J2ObjC.run(Collections.singletonList(jarPath));
+    options.getHeaderMap().setCombineJars();
+    J2ObjC.run(Collections.singletonList(jarPath), options);
     makeAssertionsForCombinedJar();
   }
 
+  public void testGlobalCombinedOutput() throws Exception {
+    options.setGlobalCombinedOutput("testGlobalCombinedOutputFile");
+    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath), options);
+    makeAssertionsForGlobalCombinedOutputJavaFiles();
+  }
+
   public void testSourceDirsOption() throws Exception {
-    Options.setOutputStyle(Options.OutputStyleOption.SOURCE);
-    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath));
+    options.getHeaderMap().setOutputStyle(HeaderMap.OutputStyleOption.SOURCE);
+    J2ObjC.run(Arrays.asList(exampleJavaPath, packageInfoPath), options);
     String exampleH = getTranslatedFile(exampleJavaPath.replace(".java", ".h"));
     String exampleM = getTranslatedFile(exampleJavaPath.replace(".java", ".m"));
     String packageInfoH = getTranslatedFile(packageInfoPath.replace(".java", ".h"));
@@ -193,12 +212,11 @@ public class J2ObjCTest extends GenerationTest {
   // Test a simple annotation processor on the classpath.
   public void testAnnotationProcessing() throws Exception {
     String processorPath = getResourceAsFile("annotations/Processor.jar");
-    Options.getClassPathEntries().add(processorPath);
+    options.fileUtil().getClassPathEntries().add(processorPath);
 
     String examplePath = addSourceFile(EXAMPLE_JAVA_SOURCE, "annotations/Example.java");
-    J2ObjC.run(Collections.singletonList(examplePath));
+    J2ObjC.run(Collections.singletonList(examplePath), options);
     assertErrorCount(0);
-
 
     String translatedAnnotationHeader = getTranslatedFile("ProcessingResult.h");
     String translatedAnnotationImpl = getTranslatedFile("ProcessingResult.m");
@@ -214,21 +232,28 @@ public class J2ObjCTest extends GenerationTest {
   // Test a simple annotation processor on the processor path.
   public void testAnnotationProcessingWithProcessorPath() throws Exception {
     String processorPath = getResourceAsFile("annotations/Processor.jar");
-    Options.getProcessorPathEntries().add(processorPath);
+    options.getProcessorPathEntries().add(processorPath);
 
     String examplePath = addSourceFile(EXAMPLE_JAVA_SOURCE, "annotations/Example.java");
-    J2ObjC.run(Collections.singletonList(examplePath));
+    J2ObjC.run(Collections.singletonList(examplePath), options);
     assertErrorCount(0);
   }
 
   // Test a specified annotation processor.
   public void testSpecifiedAnnotationProcessing() throws Exception {
     String processorPath = getResourceAsFile("annotations/Processor.jar");
-    Options.getClassPathEntries().add(processorPath);
-    Options.setProcessors("com.google.devtools.j2objc.annotations.J2ObjCTestProcessor");
+    options.fileUtil().getClassPathEntries().add(processorPath);
+    options.setProcessors("com.google.devtools.j2objc.annotations.J2ObjCTestProcessor");
 
     String examplePath = addSourceFile(EXAMPLE_JAVA_SOURCE, "annotations/Example.java");
-    J2ObjC.run(Collections.singletonList(examplePath));
+    J2ObjC.run(Collections.singletonList(examplePath), options);
     assertErrorCount(0);
+  }
+
+  // Test for warning if compiling jar with -g.
+  public void testJarSourceDebug() throws Exception {
+    options.setEmitLineDirectives(true);
+    J2ObjC.run(Collections.singletonList(jarPath), options);
+    assertWarningCount(1);
   }
 }

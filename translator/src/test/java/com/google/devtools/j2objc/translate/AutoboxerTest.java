@@ -391,7 +391,7 @@ public class AutoboxerTest extends GenerationTest {
         + "public class Test extends Base {"
         + "@Override public void print(Object o) { super.print(123.456f); }}", "Test", "Test.m");
     assertTranslation(translation,
-        "[super printWithId:JavaLangFloat_valueOfWithFloat_(123.456f)];");
+        "Base_printWithId_(self, JavaLangFloat_valueOfWithFloat_(123.456f));");
   }
 
   public void testAssignIntLiteralToNonIntBoxedType() throws Exception {
@@ -440,7 +440,7 @@ public class AutoboxerTest extends GenerationTest {
     String translation = translateSourceFile(
         "class Test { void test(int i) { assert i == 0 : i; }}", "Test", "Test.m");
     assertTranslation(translation,
-        "JreAssert((i == 0), (JavaLangInteger_valueOfWithInt_(i)));");
+        "JreAssert(i == 0, JavaLangInteger_valueOfWithInt_(i));");
   }
 
   public void testNonWrapperObjectTypeCastToPrimitive() throws IOException {

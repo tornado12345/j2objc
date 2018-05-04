@@ -15,9 +15,7 @@
 package com.google.devtools.j2objc.util;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.CompilationUnit;
-
 import java.io.IOException;
 
 /**
@@ -26,17 +24,59 @@ import java.io.IOException;
 public class TranslationUtilTest extends GenerationTest {
 
   public void testPackageNeedsReflection() throws IOException {
-    Options.setStripReflection(true);
+    options.setStripReflection(true);
     CompilationUnit unit = compileType("foo.package-info",
         "@ReflectionSupport(value = ReflectionSupport.Level.FULL) package foo; "
         + "import com.google.j2objc.annotations.ReflectionSupport;");
-    assertTrue(TranslationUtil.needsReflection(unit.getPackage()));
+    TranslationUtil translationUtil = unit.getEnv().translationUtil();
+    assertTrue(translationUtil.needsReflection(unit.getPackage()));
     unit = compileType("bar.package-info",
         "@ReflectionSupport(value = ReflectionSupport.Level.NATIVE_ONLY) package foo; "
         + "import com.google.j2objc.annotations.ReflectionSupport;");
-    assertFalse(TranslationUtil.needsReflection(unit.getPackage()));
+    assertFalse(translationUtil.needsReflection(unit.getPackage()));
     unit = compileType("mumble.package-info",
         "package mumble; "
         + "import com.google.j2objc.annotations.ReflectionSupport;");
-    assertFalse(TranslationUtil.needsReflection(unit.getPackage()));  }
+    assertFalse(translationUtil.needsReflection(unit.getPackage()));
+  }
+
+  public void testTypeNeedsReflection() throws IOException {
+    addSourceFile("@ReflectionSupport(ReflectionSupport.Level.FULL) package foo; "
+        + "import com.google.j2objc.annotations.ReflectionSupport;", "foo/package-info.java");
+    CompilationUnit unit = translateType("foo.A", "package foo; public class A {}");
+    TranslationUtil translationUtil = unit.getEnv().translationUtil();
+    assertTrue(translationUtil.needsReflection(unit.getTypes().get(0)));
+
+    addSourceFile("@ReflectionSupport(ReflectionSupport.Level.NATIVE_ONLY) package bar; "
+        + "import com.google.j2objc.annotations.ReflectionSupport;", "bar/package-info.java");
+    unit = translateType("bar.A", "package bar; public class A {}");
+    translationUtil = unit.getEnv().translationUtil();
+    assertFalse(translationUtil.needsReflection(unit.getTypes().get(0)));
+
+    addSourceFile("@ReflectionSupport(ReflectionSupport.Level.NATIVE_ONLY) package baz; "
+        + "import com.google.j2objc.annotations.ReflectionSupport;", "baz/package-info.java");
+    unit = translateType("baz.A",
+        "package baz; import com.google.j2objc.annotations.ReflectionSupport; "
+        + "@ReflectionSupport(ReflectionSupport.Level.FULL) public class A {}");
+    translationUtil = unit.getEnv().translationUtil();
+    assertTrue(translationUtil.needsReflection(unit.getTypes().get(0)));
+
+    addSourceFile("@ReflectionSupport(ReflectionSupport.Level.FULL) package qux; "
+        + "import com.google.j2objc.annotations.ReflectionSupport;", "qux/package-info.java");
+    unit = translateType("qux.A",
+        "package qux; import com.google.j2objc.annotations.ReflectionSupport; "
+        + "@ReflectionSupport(ReflectionSupport.Level.NATIVE_ONLY) public class A {}");
+    translationUtil = unit.getEnv().translationUtil();
+    assertFalse(translationUtil.needsReflection(unit.getTypes().get(0)));
+
+    options.setStripReflection(true);
+    unit = translateType("quux.A", "package quux; public class A {}");
+    translationUtil = unit.getEnv().translationUtil();
+    assertFalse(translationUtil.needsReflection(unit.getTypes().get(0)));
+
+    options.setStripReflection(false);
+    unit = translateType("quuz.A", "package quuz; public class A {}");
+    translationUtil = unit.getEnv().translationUtil();
+    assertTrue(translationUtil.needsReflection(unit.getTypes().get(0)));
+  }
 }

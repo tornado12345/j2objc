@@ -14,6 +14,7 @@
 
 package com.google.devtools.j2objc.pipeline;
 
+import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.file.InputFile;
 import com.google.devtools.j2objc.gen.GenerationUnit;
 
@@ -30,13 +31,20 @@ public class ProcessingContext {
   private final GenerationUnit generationUnit;
 
   public ProcessingContext(InputFile file, GenerationUnit generationUnit) {
-    originalSourcePath = file.getPath();
+    originalSourcePath = file.getOriginalLocation();
     this.file = file;
     this.generationUnit = generationUnit;
+    generationUnit.incrementInputs();
   }
 
-  public static ProcessingContext fromFile(InputFile file) {
-    return new ProcessingContext(file, GenerationUnit.newSingleFileUnit(file));
+  public static ProcessingContext fromFile(InputFile file, Options options) {
+    return new ProcessingContext(file, GenerationUnit.newSingleFileUnit(file, options));
+  }
+
+  public static ProcessingContext fromExtractedJarEntry(
+      InputFile file, String sourceName, Options options) {
+    return new ProcessingContext(
+        file, GenerationUnit.newSingleExtractedJarEntryUnit(file, sourceName, options));
   }
 
   public String getOriginalSourcePath() {

@@ -17,10 +17,8 @@
 package com.google.devtools.j2objc.gen;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.util.ErrorUtil;
 import com.google.devtools.j2objc.util.NameTable;
-
 import java.io.IOException;
 
 /**
@@ -58,7 +56,7 @@ public class ObjectiveCSourceFileGeneratorTest extends GenerationTest {
         + "}";
 
     // First test with defaults, to see if warnings are reported.
-    assertTrue(Options.jsniWarnings());
+    assertTrue(options.jsniWarnings());
     String translation = translateSourceFile(source, "Example", "Example.h");
     assertWarningCount(2);
 
@@ -81,7 +79,7 @@ public class ObjectiveCSourceFileGeneratorTest extends GenerationTest {
     assertNotInTranslation(translation, "jsni-comment;");
 
     // Now rebuild with warnings disabled.
-    Options.setJsniWarnings(false);
+    options.setJsniWarnings(false);
     ErrorUtil.reset();
     translation = translateSourceFile(source, "Example", "Example.h");
     assertWarningCount(0);
@@ -105,21 +103,21 @@ public class ObjectiveCSourceFileGeneratorTest extends GenerationTest {
         + " }", "Test", "Test.h");
     // finalFoo
     assertTranslation(header, "#define Test_finalFoo 12");
-    assertTranslation(header, "jint Test_get_finalFoo();");
+    assertTranslation(header, "jint Test_get_finalFoo(void);");
     assertTranslation(header, "J2OBJC_STATIC_FIELD_CONSTANT(Test, finalFoo, jint)");
     // foo
-    assertTranslation(header, "jint Test_get_foo();");
+    assertTranslation(header, "jint Test_get_foo(void);");
     assertTranslation(header, "jint Test_set_foo(jint value);");
-    assertTranslation(header, "jint *Test_getRef_foo();");
+    assertTranslation(header, "jint *Test_getRef_foo(void);");
     assertTranslation(header, "FOUNDATION_EXPORT jint Test_foo;");
     assertTranslation(header, "J2OBJC_STATIC_FIELD_PRIMITIVE(Test, foo, jint)");
     // bar
-    assertTranslation(header, "NSString *Test_get_bar();");
+    assertTranslation(header, "NSString *Test_get_bar(void);");
     assertTranslation(header, "NSString *Test_set_bar(NSString *value);");
     assertTranslation(header, "FOUNDATION_EXPORT NSString *Test_bar;");
     assertTranslation(header, "J2OBJC_STATIC_FIELD_OBJ(Test, bar, NSString *)");
     // finalBar
-    assertTranslation(header, "NSString *Test_get_finalBar();");
+    assertTranslation(header, "NSString *Test_get_finalBar(void);");
     assertTranslation(header, "FOUNDATION_EXPORT NSString *Test_finalBar;");
     assertTranslation(header, "J2OBJC_STATIC_FIELD_OBJ_FINAL(Test, finalBar, NSString *)");
   }
@@ -162,11 +160,12 @@ public class ObjectiveCSourceFileGeneratorTest extends GenerationTest {
   }
 
   public void testOverriddenGenericConstructor() throws IOException {
+    options.setDisallowInheritedConstructors(true);
     addSourceFile("class A<T> { A(T t) {} }", "A.java");
     String translation = translateSourceFile(
         "class B extends A<String> { B(String s) { super(s); } }", "B", "B.h");
     assertTranslation(translation, "- (instancetype)initWithNSString:(NSString *)s;");
-    assertNotInTranslation(translation, "initWithId");
+    assertTranslation(translation, "initWithId:(id)arg0 NS_UNAVAILABLE;");
   }
 
   public void testPrivateMethodHiding() throws IOException {
@@ -203,5 +202,16 @@ public class ObjectiveCSourceFileGeneratorTest extends GenerationTest {
     assertTranslation(translation, inner1);
     assertTranslation(translation, inner2);
     assertTrue(translation.indexOf(inner2) < translation.indexOf(inner1));
+  }
+
+  public void testDuplicateTypeName() throws IOException {
+    addSourceFile("package bar.foo; public interface A {}", "bar/foo/A.java");
+    options.getPackagePrefixes().addPrefix("foo.bar", "XX");
+    options.getPackagePrefixes().addPrefix("bar.foo", "XX");
+    translateSourceFile(
+        "package foo.bar; interface B extends bar.foo.A {}  public class A implements B {}",
+        "foo.bar.A", "foo/bar/A.m");
+    assertTrue(ErrorUtil.getErrorMessages().contains("Duplicate type name found in XXA->XXB->XXA"));
+    assertTrue(ErrorUtil.errorCount() > 0);
   }
 }

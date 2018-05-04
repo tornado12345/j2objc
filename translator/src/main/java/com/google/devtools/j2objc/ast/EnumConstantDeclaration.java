@@ -14,13 +14,12 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.ExecutablePair;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.VariableElement;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Node for an enum constant.
@@ -29,10 +28,10 @@ public class EnumConstantDeclaration extends BodyDeclaration {
 
   private VariableElement variableElement = null;
   private ExecutablePair method = ExecutablePair.NULL;
-  private final ChildLink<SimpleName> name = ChildLink.create(SimpleName.class, this);
+  private TypeMirror varargsType = null;
   private final ChildList<Expression> arguments = ChildList.create(Expression.class, this);
-  private final ChildLink<AnonymousClassDeclaration> anonymousClassDeclaration =
-      ChildLink.create(AnonymousClassDeclaration.class, this);
+  private final ChildLink<TypeDeclaration> anonymousClassDeclaration =
+      ChildLink.create(TypeDeclaration.class, this);
 
   public EnumConstantDeclaration() {}
 
@@ -40,18 +39,19 @@ public class EnumConstantDeclaration extends BodyDeclaration {
     super(other);
     variableElement = other.getVariableElement();
     method = other.getExecutablePair();
-    name.copyFrom(other.getName());
+    varargsType = other.getVarargsType();
     arguments.copyFrom(other.getArguments());
     anonymousClassDeclaration.copyFrom(other.getAnonymousClassDeclaration());
+  }
+
+  public EnumConstantDeclaration(VariableElement variableElement) {
+    super(variableElement);
+    this.variableElement = variableElement;
   }
 
   @Override
   public Kind getKind() {
     return Kind.ENUM_CONSTANT_DECLARATION;
-  }
-
-  public IVariableBinding getVariableBinding() {
-    return BindingConverter.unwrapVariableElement(variableElement);
   }
 
   public VariableElement getVariableElement() {
@@ -61,11 +61,6 @@ public class EnumConstantDeclaration extends BodyDeclaration {
   public EnumConstantDeclaration setVariableElement(VariableElement element) {
     variableElement = element;
     return this;
-  }
-
-  // TODO(tball): remove when javac migration is complete.
-  public IMethodBinding getMethodBinding() {
-    return (IMethodBinding) BindingConverter.unwrapTypeMirrorIntoBinding(method.type());
   }
 
   public ExecutablePair getExecutablePair() {
@@ -81,12 +76,16 @@ public class EnumConstantDeclaration extends BodyDeclaration {
     return method.element();
   }
 
-  public SimpleName getName() {
-    return name.get();
+  public ExecutableType getExecutableType() {
+    return method.type();
   }
 
-  public EnumConstantDeclaration setName(SimpleName newName) {
-    name.set(newName);
+  public TypeMirror getVarargsType() {
+    return varargsType;
+  }
+
+  public EnumConstantDeclaration setVarargsType(TypeMirror type) {
+    varargsType = type;
     return this;
   }
 
@@ -98,12 +97,12 @@ public class EnumConstantDeclaration extends BodyDeclaration {
     arguments.add(arg);
   }
 
-  public AnonymousClassDeclaration getAnonymousClassDeclaration() {
+  public TypeDeclaration getAnonymousClassDeclaration() {
     return anonymousClassDeclaration.get();
   }
 
   public EnumConstantDeclaration setAnonymousClassDeclaration(
-      AnonymousClassDeclaration newAnonymousClassDeclaration) {
+      TypeDeclaration newAnonymousClassDeclaration) {
     anonymousClassDeclaration.set(newAnonymousClassDeclaration);
     return this;
   }
@@ -113,7 +112,6 @@ public class EnumConstantDeclaration extends BodyDeclaration {
     if (visitor.visit(this)) {
       javadoc.accept(visitor);
       annotations.accept(visitor);
-      name.accept(visitor);
       arguments.accept(visitor);
       anonymousClassDeclaration.accept(visitor);
     }

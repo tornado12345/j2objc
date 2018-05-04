@@ -14,10 +14,9 @@
 
 package com.google.devtools.j2objc.translate;
 
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
+import com.google.common.collect.MultimapBuilder;
 import com.google.common.collect.Sets;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
 import com.google.devtools.j2objc.ast.Block;
 import com.google.devtools.j2objc.ast.BodyDeclaration;
@@ -68,7 +67,8 @@ public class OcniExtractor extends UnitTreeVisitor {
    * This is trickier than you might expect because of inner types.
    */
   private static ListMultimap<TreeNode, Comment> findBlockComments(CompilationUnit unit) {
-    ListMultimap<TreeNode, Comment> blockComments = ArrayListMultimap.create();
+    ListMultimap<TreeNode, Comment> blockComments =
+        MultimapBuilder.hashKeys().arrayListValues().build();
     for (Comment comment : unit.getCommentList()) {
       if (!comment.isBlockComment()) {
         continue;
@@ -117,7 +117,7 @@ public class OcniExtractor extends UnitTreeVisitor {
     if (Modifier.isSynchronized(modifiers)) {
       TypeElement declaringClass = ElementUtil.getDeclaringClass(node.getExecutableElement());
       SynchronizedStatement syncStmt = new SynchronizedStatement(
-          Modifier.isStatic(modifiers) ? new TypeLiteral(declaringClass.asType(), typeEnv)
+          Modifier.isStatic(modifiers) ? new TypeLiteral(declaringClass.asType(), typeUtil)
           : new ThisExpression(declaringClass.asType()));
       syncStmt.setBody(TreeUtil.remove(node.getBody()));
       Block newBody = new Block();
@@ -177,7 +177,7 @@ public class OcniExtractor extends UnitTreeVisitor {
       bodyDeclarations.add(NativeDeclaration.newInnerDeclaration(null,
           "- (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state "
           + "objects:(__unsafe_unretained id *)stackbuf count:(NSUInteger)len {\n"
-          + "  return JreDefaultFastEnumeration(self, state, stackbuf, len);\n}\n"));
+          + "  return JreDefaultFastEnumeration(self, state, stackbuf);\n}\n"));
     }
   }
 
@@ -242,8 +242,22 @@ public class OcniExtractor extends UnitTreeVisitor {
     return null;
   }
 
-  private enum OcniType {
-    HEADER, SOURCE;
+  /**
+   * Kinds of OCNI comments. Currently there are normal source and header types.
+   */
+  // TODO(kstanger): move to BlockComment, or a new OCNIComment subclass.
+  public enum OcniType {
+    HEADER("/*-HEADER["), SOURCE("/*-[");
+
+    private final String delimiter;
+
+    private OcniType(String delim) {
+      delimiter = delim;
+    }
+
+    public String delimiter() {
+      return delimiter;
+    }
 
     static OcniType fromString(String type) {
       if (type.isEmpty()) {
@@ -289,7 +303,7 @@ public class OcniExtractor extends UnitTreeVisitor {
         return null;
       }
     }
-    if (Options.jsniWarnings() && hasJsni(text)) {
+    if (options.jsniWarnings() && hasJsni(text)) {
       ErrorUtil.warning(node, "JSNI comment found");
     }
     return null;

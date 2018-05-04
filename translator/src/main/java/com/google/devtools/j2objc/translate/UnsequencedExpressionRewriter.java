@@ -14,9 +14,9 @@
 
 package com.google.devtools.j2objc.translate;
 
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
+import com.google.common.collect.MultimapBuilder;
 import com.google.common.collect.Sets;
 import com.google.devtools.j2objc.ast.AssertStatement;
 import com.google.devtools.j2objc.ast.Assignment;
@@ -59,7 +59,6 @@ import java.util.List;
 import java.util.Set;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.VariableElement;
-import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 
 /**
@@ -131,7 +130,8 @@ public class UnsequencedExpressionRewriter extends UnitTreeVisitor {
     if (!hasModification) {
       return Collections.emptyList();
     }
-    ListMultimap<VariableElement, VariableAccess> accessesByVar = ArrayListMultimap.create();
+    ListMultimap<VariableElement, VariableAccess> accessesByVar =
+        MultimapBuilder.hashKeys().arrayListValues().build();
     for (VariableAccess access : orderedAccesses) {
       accessesByVar.put(access.variable, access);
     }
@@ -300,7 +300,7 @@ public class UnsequencedExpressionRewriter extends UnitTreeVisitor {
 
       // If there's a new access in a new branch, then we extract an if-statement.
       if (branch != branches.get(lastIfExtractIdx)) {
-        TypeMirror boolType = typeUtil.getPrimitiveType(TypeKind.BOOLEAN);
+        TypeMirror boolType = typeUtil.getBoolean();
         if (conditionalVar == null) {
           conditionalVar = GeneratedVariableElement.newLocalVar(
               "unseq$" + count++, boolType, currentMethod);
@@ -341,7 +341,7 @@ public class UnsequencedExpressionRewriter extends UnitTreeVisitor {
     if (branches.size() == 1) {
       return branches.get(0).copy();
     } else {
-      InfixExpression result = new InfixExpression(typeUtil.getPrimitiveType(TypeKind.BOOLEAN), op);
+      InfixExpression result = new InfixExpression(typeUtil.getBoolean(), op);
       TreeUtil.copyList(branches, result.getOperands());
       return result;
     }
@@ -555,7 +555,7 @@ public class UnsequencedExpressionRewriter extends UnitTreeVisitor {
   private IfStatement createLoopTermination(Expression loopCondition) {
     IfStatement newIf = new IfStatement();
     newIf.setExpression(new PrefixExpression(
-        typeUtil.getPrimitiveType(TypeKind.BOOLEAN), PrefixExpression.Operator.NOT,
+        typeUtil.getBoolean(), PrefixExpression.Operator.NOT,
         ParenthesizedExpression.parenthesize(loopCondition.copy())));
     newIf.setThenStatement(new BreakStatement());
     return newIf;
@@ -572,7 +572,7 @@ public class UnsequencedExpressionRewriter extends UnitTreeVisitor {
       List<Statement> stmtList = TreeUtil.asStatementList(node.getBody()).subList(0, 0);
       extractOrderedAccesses(stmtList, currentTopNode, toExtract);
       stmtList.add(createLoopTermination(node.getExpression()));
-      node.setExpression(new BooleanLiteral(true, typeEnv));
+      node.setExpression(new BooleanLiteral(true, typeUtil));
     }
     return false;
   }
@@ -588,7 +588,7 @@ public class UnsequencedExpressionRewriter extends UnitTreeVisitor {
       List<Statement> stmtList = TreeUtil.asStatementList(node.getBody());
       extractOrderedAccesses(stmtList, currentTopNode, toExtract);
       stmtList.add(createLoopTermination(node.getExpression()));
-      node.setExpression(new BooleanLiteral(true, typeEnv));
+      node.setExpression(new BooleanLiteral(true, typeUtil));
     }
     return false;
   }

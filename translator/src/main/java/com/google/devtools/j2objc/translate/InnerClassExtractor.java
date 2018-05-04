@@ -102,10 +102,7 @@ public class InnerClassExtractor extends UnitTreeVisitor {
         parentNode.remove();
       }
 
-      TypeElement type = node.getTypeElement();
-      if (type.getKind().isClass() && !ElementUtil.isStatic(type)) {
-        addOuterFields(node);
-      }
+      addCaptureFields(node);
 
       // Make this node non-private, if necessary, and add it to the unit's type
       // list.
@@ -113,23 +110,17 @@ public class InnerClassExtractor extends UnitTreeVisitor {
       unitTypes.add(insertIdx, node);
 
       // Check for erroneous WeakOuter annotation on static inner class.
+      TypeElement type = node.getTypeElement();
       if (ElementUtil.isStatic(type) && ElementUtil.hasAnnotation(type, WeakOuter.class)) {
         ErrorUtil.warning("static class " + type.getQualifiedName() + " has WeakOuter annotation");
       }
     }
   }
 
-  private void addOuterFields(AbstractTypeDeclaration node) {
-    List<BodyDeclaration> members = node.getBodyDeclarations();
-    TypeElement clazz = node.getTypeElement();
-
-    VariableElement outerFieldElement = captureInfo.getOuterField(clazz);
-    if (outerFieldElement != null) {
-      members.add(0, new FieldDeclaration(outerFieldElement, null));
-    }
-
-    for (VariableElement field : captureInfo.getCaptureFields(clazz)) {
-      node.addBodyDeclaration(new FieldDeclaration(field, null));
+  private void addCaptureFields(AbstractTypeDeclaration node) {
+    List<BodyDeclaration> members = node.getBodyDeclarations().subList(0, 0);
+    for (VariableElement field : captureInfo.getCaptureFields(node.getTypeElement())) {
+      members.add(new FieldDeclaration(field, null));
     }
   }
 }

@@ -61,13 +61,13 @@ public class SoftReferenceTest extends TestCase {
 
   @Test
   public void testSoftReference() {
-    final boolean[] dealloced = { false };
+    final int[] finalizeCount = { 0 };
     for (@AutoreleasePool int i = 0; i < 1; i++) {
       for (@AutoreleasePool int j = 0; j < 1; j++) {
         // Create a referent inside this autorelease pool.
         Object referent = new Object() {
           public void finalize() {
-            dealloced[0] = true;
+            finalizeCount[0]++;
           }
         };
         softRef = new SoftReference<Object>(referent);
@@ -76,18 +76,18 @@ public class SoftReferenceTest extends TestCase {
         // Clear referent ref, verify it's still available in the reference.
         referent = null;
         assertNotNull("softRef was cleared", softRef.get());
-        assertFalse("referent dealloc'ed too soon", dealloced[0]);
+        assertEquals("referent dealloc'ed too soon", 0, finalizeCount[0]);
       }
 
       // Verify soft reference wasn't cleared.
       assertNotNull("softRef was cleared", softRef.get());
-      assertFalse("referent dealloc'ed too soon", dealloced[0]);
+      assertEquals("referent dealloc'ed too soon", 0, finalizeCount[0]);
     }
 
     // Send low memory notification and verify reference was released.
     fakeLowMemoryNotification();
     assertNull("softRef was not cleared", softRef.get());
-    assertTrue("referent wasn't dealloc'ed", dealloced[0]);
+    assertEquals("referent wasn't dealloc'ed", 1, finalizeCount[0]);
   }
 
   @Test
@@ -146,6 +146,27 @@ public class SoftReferenceTest extends TestCase {
       assertFalse("referent dealloc'ed too soon", dealloced[0]);
     }
     assertTrue("referent wasn't dealloc'ed", dealloced[0]);
+  }
+
+  @Test
+  public void testSoftReferenceSet() {
+    // soft_references in IOSReference should not call referent's hashCode().
+    final int[] hashCodeCount = { 0 };
+    for (@AutoreleasePool int i = 0; i < 1; i++) {
+      Object referent = new Object() {
+        @Override
+        public int hashCode() {
+          hashCodeCount[0]++;
+          return super.hashCode();
+        }
+      };
+
+      softRef = new SoftReference<Object>(referent);
+      referent = null;
+    }
+    fakeLowMemoryNotification();
+    // Verify that referent's hashCode() was not called
+    assertEquals("referent's hashCode() was called", 0, hashCodeCount[0]);
   }
 
   private static native void fakeLowMemoryNotification() /*-[

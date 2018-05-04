@@ -14,7 +14,8 @@
 
 package com.google.devtools.j2objc.util;
 
-import com.google.devtools.j2objc.types.Types;
+import com.google.devtools.j2objc.Options;
+import com.google.devtools.j2objc.gen.SignatureGenerator;
 
 /**
  * The environment used during translation of a compilation unit.
@@ -23,30 +24,32 @@ public class TranslationEnvironment {
 
   private final ElementUtil elementUtil;
   private final TypeUtil typeUtil;
-  private final Types typeEnv;
   private final CaptureInfo captureInfo;
   private final NameTable nameTable;
+  private final SignatureGenerator signatureGenerator;
   private final TranslationUtil translationUtil;
+  private final Options options;
 
-  public TranslationEnvironment(ParserEnvironment parserEnv) {
+  public TranslationEnvironment(Options options, ParserEnvironment parserEnv) {
     elementUtil = new ElementUtil(parserEnv.elementUtilities());
-    typeUtil = new TypeUtil(parserEnv.typeUtilities(), elementUtil);
-    typeEnv = new Types(parserEnv);
-    captureInfo = new CaptureInfo(typeEnv, typeUtil);
-    nameTable = new NameTable(typeEnv, elementUtil, captureInfo);
-    translationUtil = new TranslationUtil(typeEnv, nameTable);
+    typeUtil = new TypeUtil(parserEnv, elementUtil);
+    captureInfo = new CaptureInfo(typeUtil);
+    nameTable = new NameTable(typeUtil, captureInfo, options);
+    signatureGenerator = new SignatureGenerator(typeUtil);
+    translationUtil = new TranslationUtil(typeUtil, nameTable, options, elementUtil);
+    this.options = options;
   }
 
   public ElementUtil elementUtil() {
     return elementUtil;
   }
 
-  public TypeUtil typeUtil() {
-    return typeUtil;
+  public Options options() {
+    return options;
   }
 
-  public Types types() {
-    return typeEnv;
+  public TypeUtil typeUtil() {
+    return typeUtil;
   }
 
   public CaptureInfo captureInfo() {
@@ -55,6 +58,10 @@ public class TranslationEnvironment {
 
   public NameTable nameTable() {
     return nameTable;
+  }
+
+  public SignatureGenerator signatureGenerator() {
+    return signatureGenerator;
   }
 
   public TranslationUtil translationUtil() {

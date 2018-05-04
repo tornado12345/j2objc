@@ -20,6 +20,7 @@ import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.devtools.j2objc.util.UnicodeUtils;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
@@ -34,7 +35,7 @@ import javax.lang.model.type.TypeMirror;
  * @author Tom Ball
  */
 public class DebugASTPrinter extends TreeVisitor {
-  private SourceBuilder sb = new SourceBuilder(false);
+  protected SourceBuilder sb = new SourceBuilder(false);
   private boolean inIfStatement = false;
 
   public static String toString(TreeNode node) {
@@ -72,27 +73,15 @@ public class DebugASTPrinter extends TreeVisitor {
     sb.printIndent();
     printAnnotations(node.getAnnotations());
     printModifiers(node.getModifiers());
-    node.getType().accept(this);
+    sb.print(node.getTypeMirror().toString());
     sb.print(' ');
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getExecutableElement()));
     sb.print("()");
     if (node.getDefault() != null) {
       sb.print(" default ");
       node.getDefault().accept(this);
     }
     sb.println(';');
-    return false;
-  }
-
-  @Override
-  public boolean visit(AnonymousClassDeclaration node) {
-    sb.print(" {");
-    sb.indent();
-    for (BodyDeclaration decl : node.getBodyDeclarations()) {
-      decl.accept(this);
-    }
-    sb.unindent();
-    sb.println("}");
     return false;
   }
 
@@ -107,15 +96,20 @@ public class DebugASTPrinter extends TreeVisitor {
 
   @Override
   public boolean visit(ArrayCreation node) {
+    Type componentType = node.getType().getComponentType();
+    int emptyDims = 1;
+    while (componentType.getKind() == TreeNode.Kind.ARRAY_TYPE) {
+      componentType = ((ArrayType) componentType).getComponentType();
+      emptyDims++;
+    }
+    emptyDims -= node.getDimensions().size();
     sb.print("new ");
-    node.getType().accept(this);
+    componentType.accept(this);
     for (Expression dim : node.getDimensions()) {
       sb.print('[');
       dim.accept(this);
       sb.print(']');
     }
-    int emptyDims = TypeUtil.getDimensions((javax.lang.model.type.ArrayType) node.getTypeMirror())
-        - node.getDimensions().size();
     for (int i = 0; i < emptyDims; i++) {
       sb.print("[]");
     }
@@ -340,7 +334,8 @@ public class DebugASTPrinter extends TreeVisitor {
     sb.printIndent();
     sb.print("do ");
     node.getBody().accept(this);
-    sb.print(" while (");
+    sb.printIndent();
+    sb.print("while (");
     node.getExpression().accept(this);
     sb.println(");");
     return false;
@@ -370,7 +365,7 @@ public class DebugASTPrinter extends TreeVisitor {
     sb.printIndent();
     printAnnotations(node.getAnnotations());
     printModifiers(node.getModifiers());
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getVariableElement()));
     if (!node.getArguments().isEmpty()) {
       sb.print('(');
       for (Iterator<Expression> it = node.getArguments().iterator(); it.hasNext(); ) {
@@ -420,7 +415,7 @@ public class DebugASTPrinter extends TreeVisitor {
   public boolean visit(ExpressionMethodReference node) {
     node.getExpression().accept(this);
     sb.print("::");
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getExecutableElement()));
     return false;
   }
 
@@ -448,7 +443,7 @@ public class DebugASTPrinter extends TreeVisitor {
     sb.printIndent();
     printAnnotations(node.getAnnotations());
     printModifiers(node.getModifiers());
-    node.getType().accept(this);
+    sb.print(node.getTypeMirror().toString());
     sb.print(' ');
     for (Iterator<VariableDeclarationFragment> it = node.getFragments().iterator();
         it.hasNext(); ) {
@@ -641,6 +636,14 @@ public class DebugASTPrinter extends TreeVisitor {
     return false;
   }
 
+  protected void printMethodBody(MethodDeclaration node) {
+    if (node.getBody() == null) {
+      sb.println(';');
+    } else {
+      node.getBody().accept(this);
+    }
+  }
+
   @Override
   public boolean visit(MethodDeclaration node) {
     sb.printIndent();
@@ -649,12 +652,10 @@ public class DebugASTPrinter extends TreeVisitor {
     ExecutableElement meth = node.getExecutableElement();
     printTypeParameters(meth.getTypeParameters());
     if (!node.isConstructor()) {
-      if (node.getReturnType() != null) {
-        node.getReturnType().accept(this);
-      }
+      sb.print(node.getReturnTypeMirror().toString());
       sb.print(' ');
     }
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(meth));
     sb.print("(");
     for (Iterator<SingleVariableDeclaration> it = node.getParameters().iterator(); it.hasNext(); ) {
       it.next().accept(this);
@@ -674,11 +675,7 @@ public class DebugASTPrinter extends TreeVisitor {
       }
       sb.print(' ');
     }
-    if (node.getBody() == null) {
-      sb.println(';');
-    } else {
-      node.getBody().accept(this);
-    }
+    printMethodBody(node);
     return false;
   }
 
@@ -689,7 +686,7 @@ public class DebugASTPrinter extends TreeVisitor {
       sb.print(".");
     }
     printTypeParameters(node.getExecutableElement().getTypeParameters());
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getExecutableElement()));
     sb.print('(');
     for (Iterator<Expression> it = node.getArguments().iterator(); it.hasNext(); ) {
       it.next().accept(this);
@@ -760,7 +757,8 @@ public class DebugASTPrinter extends TreeVisitor {
 
   @Override
   public boolean visit(NumberLiteral node) {
-    sb.print(node.getToken());
+    String text = node.getToken();
+    sb.print(text != null ? text : node.getValue().toString());
     return false;
   }
 
@@ -871,7 +869,7 @@ public class DebugASTPrinter extends TreeVisitor {
       sb.print("...");
     }
     sb.print(' ');
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getVariableElement()));
     for (int i = 0; i < node.getExtraDimensions(); i++) {
       sb.print("[]");
     }
@@ -914,7 +912,7 @@ public class DebugASTPrinter extends TreeVisitor {
       sb.print(".");
     }
     sb.print("super.");
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getVariableElement()));
     return false;
   }
 
@@ -926,7 +924,7 @@ public class DebugASTPrinter extends TreeVisitor {
     }
     sb.print("super.");
     printTypeParameters(node.getExecutableElement().getTypeParameters());
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getExecutableElement()));
     sb.print("(");
     for (Iterator<Expression> it = node.getArguments().iterator(); it.hasNext(); ) {
       it.next().accept(this);
@@ -945,7 +943,7 @@ public class DebugASTPrinter extends TreeVisitor {
       sb.print(".");
     }
     sb.print("super::");
-    sb.print(node.getName().toString());
+    sb.print(ElementUtil.getName(node.getExecutableElement()));
     return false;
   }
 
@@ -1044,6 +1042,8 @@ public class DebugASTPrinter extends TreeVisitor {
     return false;
   }
 
+  protected void sort(List<BodyDeclaration> lst) {}
+
   @Override
   public boolean visit(TypeDeclaration node) {
     if (node.getJavadoc() != null) {
@@ -1055,15 +1055,19 @@ public class DebugASTPrinter extends TreeVisitor {
     node.getName().accept(this);
     printTypeParameters(node.getTypeElement().getTypeParameters());
     sb.print(' ');
-    if (node.getSuperclassType() != null) {
+    TypeMirror superclassTypeMirror = node.getSuperclassTypeMirror();
+    if (!(TypeUtil.isNone(superclassTypeMirror)
+        || TypeUtil.isJavaObject(superclassTypeMirror))) {
       sb.print("extends ");
-      node.getSuperclassType().accept(this);
+      sb.print(superclassTypeMirror.toString());
       sb.print(' ');
     }
-    if (!node.getSuperInterfaceTypes().isEmpty()) {
+    List<? extends TypeMirror> superInterfaceTypeMirrors = node.getSuperInterfaceTypeMirrors();
+    if (!superInterfaceTypeMirrors.isEmpty()) {
       sb.print(node.isInterface() ? "extends " : "implements "); //$NON-NLS-2$
-      for (Iterator<Type> it = node.getSuperInterfaceTypes().iterator(); it.hasNext(); ) {
-        it.next().accept(this);
+      for (Iterator<? extends TypeMirror> it = node.getSuperInterfaceTypeMirrors().iterator();
+          it.hasNext(); ) {
+        sb.print(it.next().toString());
         if (it.hasNext()) {
           sb.print(", ");
         }
@@ -1072,8 +1076,10 @@ public class DebugASTPrinter extends TreeVisitor {
     }
     sb.println('{');
     sb.indent();
-    for (Iterator<BodyDeclaration> it = node.getBodyDeclarations().iterator(); it.hasNext(); ) {
-      it.next().accept(this);
+    List<BodyDeclaration> bodyDeclarations = new ArrayList<>(node.getBodyDeclarations());
+    sort(bodyDeclarations);
+    for (BodyDeclaration bodyDecl : bodyDeclarations) {
+      bodyDecl.accept(this);
     }
     printStaticBlock(node);
     sb.unindent();
@@ -1106,7 +1112,7 @@ public class DebugASTPrinter extends TreeVisitor {
       }
       sb.print('>');
     }
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getExecutableElement()));
     return false;
   }
 
@@ -1137,7 +1143,7 @@ public class DebugASTPrinter extends TreeVisitor {
 
   @Override
   public boolean visit(VariableDeclarationFragment node) {
-    node.getName().accept(this);
+    sb.print(ElementUtil.getName(node.getVariableElement()));
     for (int i = 0; i < node.getExtraDimensions(); i++) {
       sb.print("[]");
     }
@@ -1152,7 +1158,7 @@ public class DebugASTPrinter extends TreeVisitor {
   public boolean visit(VariableDeclarationStatement node) {
     sb.printIndent();
     printModifiers(node.getModifiers());
-    node.getType().accept(this);
+    sb.print(node.getTypeMirror().toString());
     sb.print(' ');
     for (Iterator<VariableDeclarationFragment> it = node.getFragments().iterator();
          it.hasNext(); ) {
@@ -1175,7 +1181,7 @@ public class DebugASTPrinter extends TreeVisitor {
     return false;
   }
 
-  private void printAnnotations(List<Annotation> annotations) {
+  protected void printAnnotations(List<Annotation> annotations) {
     Iterator<Annotation> iterator = annotations.iterator();
     while (iterator.hasNext()) {
       iterator.next().accept(this);
@@ -1189,7 +1195,7 @@ public class DebugASTPrinter extends TreeVisitor {
     builder.append(temp.sb.toString());
   }
 
-  private void printModifiers(int modifiers) {
+  protected void printModifiers(int modifiers) {
     if (Modifier.isPublic(modifiers)) {
       sb.print("public ");
     }
@@ -1228,20 +1234,35 @@ public class DebugASTPrinter extends TreeVisitor {
     }
   }
 
-  private void printTypeParameters(List<? extends TypeParameterElement> typeParams) {
-    if (!typeParams.isEmpty()) {
+  protected void printTypeParameter(TypeParameterElement element) {
+    sb.print(element.getSimpleName().toString());
+    Iterator<? extends TypeMirror> boundsList = element.getBounds().iterator();
+    TypeMirror bound = boundsList.next();
+    if (!TypeUtil.isJavaObject(bound) || boundsList.hasNext()) {
+      sb.print(" extends ");
+      sb.print(bound.toString());
+    }
+    while (boundsList.hasNext()) {
+      sb.print(" & ");
+      bound = boundsList.next();
+      sb.print(bound.toString());
+    }
+  }
+
+  protected void printTypeParameters(List<? extends TypeParameterElement> typeParams) {
+    Iterator<? extends TypeParameterElement> it = typeParams.iterator();
+    if (it.hasNext()) {
       sb.print('<');
-      for (int i = 0; i < typeParams.size(); ) {
-        sb.print(typeParams.get(i).getSimpleName().toString());
-        if (++i < typeParams.size()){
-          sb.print(',');
-        }
+      printTypeParameter(it.next());
+      while (it.hasNext()) {
+        sb.print(',');
+        printTypeParameter(it.next());
       }
       sb.print('>');
     }
   }
 
-  private void printStaticBlock(AbstractTypeDeclaration node) {
+  protected void printStaticBlock(AbstractTypeDeclaration node) {
     if (!node.getClassInitStatements().isEmpty()) {
       sb.printIndent();
       sb.println("static {");

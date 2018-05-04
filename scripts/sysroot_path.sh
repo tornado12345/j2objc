@@ -24,9 +24,10 @@ if [ $# -gt 0 ]; then
     --iphoneos ) SDK_TYPE=iPhoneOS ;;
     --iphonesimulator ) SDK_TYPE=iPhoneSimulator ;;
     --watchos ) SDK_TYPE=WatchOS ;;
+    --watchsimulator ) SDK_TYPE=WatchSimulator ;;
     --appletvos ) SDK_TYPE=AppleTVOS ;;
     --appletvsimulator ) SDK_TYPE=AppleTVSimulator ;;
-    * ) echo "usage: $0 [--iphoneos | --iphonesimulator | --watchos | --appletvos | --appletvsimulator]" && exit 1 ;;
+    * ) echo "usage: $0 [--iphoneos | --iphonesimulator | --watchos | --watchsimulator | --appletvos | --appletvsimulator]" && exit 1 ;;
   esac
 fi
 
@@ -43,16 +44,8 @@ if [ ! -d "${XCODE_ROOT}" ]; then
   exit 1
 fi
 
-# Try looking in the install directory for Xcode 4.x.
-PLATFORM_ROOT=${XCODE_ROOT}/Platforms/${SDK_TYPE}.platform
-if [ -d "${PLATFORM_ROOT}" ]; then
-  SDKS_ROOT=${PLATFORM_ROOT}/Developer/SDKs
-  if [ -d "${SDKS_ROOT}" ]; then
-    # Return the alphabetically last SDK in the directory, which should be the
-    # latest version.  This will need to be improved if iOS 10 ever releases.
-    SDK_PATH=$(ls -rd "${SDKS_ROOT}/${SDK_TYPE}"* | head -1)
-  fi
-fi
+LC_SDK_NAME=$(echo $SDK_TYPE | tr /A-Z/ /a-z/)
+SDK_PATH=$(xcrun -sdk $LC_SDK_NAME --show-sdk-path)
 
 if [ "x${SDK_PATH}" = "x" ]; then
   # SDKs aren't in standard location, so ask xcodebuild to look up a common
@@ -63,6 +56,8 @@ if [ "x${SDK_PATH}" = "x" ]; then
     SDK_TYPE=iphonesimulator
   elif [ ${SDK_TYPE} == "watchos" ]; then
     SDK_TYPE=watchos
+  elif [ ${SDK_TYPE} == "watchsimulator" ]; then
+    SDK_TYPE=watchsimulator
   elif [ ${SDK_TYPE} == "appletvos" ]; then
     SDK_TYPE=appletvos
   elif [ ${SDK_TYPE} == "appletvsimulator" ]; then

@@ -183,4 +183,82 @@ public class StringTest extends TestCase {
 
     assertEquals("abc", new String(new byte[] { 97, 98, 99 }, SIMPLE_CHARSET));
   }
+
+  public void testStringConstructorNullPointer() {
+    char[] chars = null;
+
+    try {
+      String.valueOf(chars);
+      fail("String.valueOf([C): Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+
+    try {
+      String.valueOf(chars, 0, 1);
+      fail("String.valueOf([CII): Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+
+    try {
+      new String(chars);
+      fail("String([C): Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+
+    try {
+      new String(chars, 0, 1);
+      fail("String([CII): Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+  }
+
+  public void testStartsWithAndEndsWith() {
+    String s = "hello";
+    assertTrue(s.startsWith("hell"));
+    assertTrue(s.startsWith("llo", 2));
+    assertTrue(s.startsWith(""));
+    assertTrue(s.startsWith("", 3));
+    assertFalse(s.startsWith("", -1));
+    assertFalse(s.startsWith("", 100));
+    assertTrue(s.startsWith("", 5));
+    assertTrue(s.endsWith("lo"));
+    assertTrue(s.endsWith(""));
+    assertFalse(s.startsWith("hello!"));
+    assertFalse(s.startsWith("llo!", 2));
+    assertFalse(s.endsWith("hi hello"));
+
+    try {
+      s.startsWith(null);
+      fail("Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+    try {
+      s.startsWith(null, 1);
+      fail("Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+    try {
+      s.endsWith(null);
+      fail("Expected NPE");
+    } catch (NullPointerException e) {
+      // Expected.
+    }
+  }
+
+  private static class NullToString {
+    public String toString() {
+      return null;
+    }
+  }
+
+  public void testStringConcatenationWithNullToString() {
+    Object o = new NullToString();
+    assertEquals("toString: null", "toString: " + o);
+  }
 }

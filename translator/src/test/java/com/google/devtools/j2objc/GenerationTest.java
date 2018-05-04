@@ -17,13 +17,17 @@
 package com.google.devtools.j2objc;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Splitter;
 import com.google.common.collect.Lists;
 import com.google.common.io.Files;
 import com.google.common.io.Resources;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.MethodDeclaration;
+import com.google.devtools.j2objc.ast.SignatureASTPrinter;
 import com.google.devtools.j2objc.ast.Statement;
+import com.google.devtools.j2objc.ast.TreeNode;
 import com.google.devtools.j2objc.ast.TreeVisitor;
+import com.google.devtools.j2objc.file.InputFile;
 import com.google.devtools.j2objc.file.RegularInputFile;
 import com.google.devtools.j2objc.gen.GenerationUnit;
 import com.google.devtools.j2objc.gen.SourceBuilder;
@@ -33,14 +37,17 @@ import com.google.devtools.j2objc.pipeline.InputFilePreprocessor;
 import com.google.devtools.j2objc.pipeline.ProcessingContext;
 import com.google.devtools.j2objc.pipeline.TranslationProcessor;
 import com.google.devtools.j2objc.util.CodeReferenceMap;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.ErrorUtil;
 import com.google.devtools.j2objc.util.FileUtil;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.Parser;
 import com.google.devtools.j2objc.util.TimeTracker;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.StringReader;
@@ -50,12 +57,15 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
 import junit.framework.TestCase;
 
 /**
@@ -69,8 +79,9 @@ public class GenerationTest extends TestCase {
 
   protected File tempDir;
   protected Parser parser;
+  protected Options options;
   private CodeReferenceMap deadCodeMap = null;
-  private CodeReferenceMap treeShakerMap = null;
+  private List<String> javacFlags = new ArrayList<>();
 
   static {
     // Prevents errors and warnings from being printed to the console.
@@ -88,26 +99,32 @@ public class GenerationTest extends TestCase {
 
   @Override
   protected void tearDown() throws Exception {
-    Options.reset();
+    options = null;
+    if (parser != null) {
+      parser.close();
+    }
     FileUtil.deleteTempDir(tempDir);
     ErrorUtil.reset();
   }
 
   protected void loadOptions() throws IOException {
-    Options.load(new String[]{
-        "-d", tempDir.getAbsolutePath(),
-        "-sourcepath", tempDir.getAbsolutePath(),
+    options = new Options();
+    String tempPath = tempDir.getAbsolutePath();
+    options.load(new String[]{
+        "-d", tempPath,
+        "-sourcepath", tempPath,
+        "-classpath", tempPath,
         "-q", // Suppress console output.
         "-encoding", "UTF-8" // Translate strings correctly when encodings are nonstandard.
     });
   }
 
   protected void createParser() {
-    parser = initializeParser(tempDir);
+    parser = initializeParser(tempDir, options);
   }
 
-  protected static Parser initializeParser(File tempDir) {
-    Parser parser = Options.newParser();
+  protected static Parser initializeParser(File tempDir, Options options) {
+    Parser parser = Parser.newParser(options);
     parser.addClasspathEntries(getComGoogleDevtoolsJ2objcPath());
     parser.addSourcepathEntry(tempDir.getAbsolutePath());
     return parser;
@@ -116,13 +133,9 @@ public class GenerationTest extends TestCase {
   protected void setDeadCodeMap(CodeReferenceMap deadCodeMap) {
     this.deadCodeMap = deadCodeMap;
   }
-  
-  protected void setTreeShakerMap(CodeReferenceMap treeShakerMap) {
-    this.treeShakerMap = treeShakerMap;
-  }
 
   protected void addSourcesToSourcepaths() throws IOException {
-    Options.getSourcePathEntries().add(tempDir.getCanonicalPath());
+    options.fileUtil().getSourcePathEntries().add(tempDir.getCanonicalPath());
   }
 
   /**
@@ -139,7 +152,7 @@ public class GenerationTest extends TestCase {
     unit.accept(new TreeVisitor() {
       @Override
       public boolean visit(MethodDeclaration node) {
-        if (node.getName().getIdentifier().equals("test")) {
+        if (ElementUtil.getName(node.getExecutableElement()).equals("test")) {
           statements.addAll(node.getBody().getStatements());
         }
         return false;
@@ -157,8 +170,19 @@ public class GenerationTest extends TestCase {
    */
   protected CompilationUnit translateType(String typeName, String source) {
     CompilationUnit newUnit = compileType(typeName, source);
-    TranslationProcessor.applyMutations(newUnit, deadCodeMap, treeShakerMap, TimeTracker.noop());
+    TranslationProcessor.applyMutations(newUnit, deadCodeMap, TimeTracker.noop());
     return newUnit;
+  }
+
+  protected String typeNameToSource(String name) {
+    return name.replace('.', '/') + ".java";
+  }
+
+  protected CompilationUnit maybeCompileType(String name, String source) {
+    String mainTypeName = name.substring(name.lastIndexOf('.') + 1);
+    String path = typeNameToSource(name);
+    parser.setEnableDocComments(options.docCommentsEnabled());
+    return parser.parse(mainTypeName, path, source);
   }
 
   /**
@@ -169,11 +193,8 @@ public class GenerationTest extends TestCase {
    * @return the parsed compilation unit
    */
   protected CompilationUnit compileType(String name, String source) {
-    String mainTypeName = name.substring(name.lastIndexOf('.') + 1);
-    String path = name.replace('.', '/') + ".java";
     int errors = ErrorUtil.errorCount();
-    parser.setEnableDocComments(Options.docCommentsEnabled());
-    CompilationUnit unit = parser.parse(mainTypeName, path, source);
+    CompilationUnit unit = maybeCompileType(name, source);
     if (ErrorUtil.errorCount() > errors) {
       int newErrorCount = ErrorUtil.errorCount() - errors;
       String info = String.format(
@@ -181,6 +202,95 @@ public class GenerationTest extends TestCase {
       failWithMessages(info, ErrorUtil.getErrorMessages().subList(errors, ErrorUtil.errorCount()));
     }
     return unit;
+  }
+
+  /**
+   * Compiles Java source to a JVM class file, then converts it to a CompilationUnit. The class
+   * file is compiled with parameter name and debug attributes.
+   *
+   * @param name the name of the public type being declared
+   * @param source the source code
+   * @return the parsed compilation unit
+   */
+  protected CompilationUnit compileAsClassFile(String name, String source) throws IOException {
+    return compileAsClassFile(name, source, javacFlags.toArray(new String[0]));
+  }
+
+  /**
+   * Compiles Java source to a JVM class file, then converts it to a CompilationUnit.
+   *
+   * @param name the name of the public type being declared
+   * @param source the source code
+   * @param flags which javac flags to use
+   * @return the parsed compilation unit
+   */
+  protected CompilationUnit compileAsClassFile(String name, String source,
+      String... flags) throws IOException {
+    assertTrue("Classfile translation not enabled", options.translateClassfiles());
+    InputFile input = createClassFile(name, source, flags);
+    if (input == null) {
+      // Class file compilation failed.
+      return null;
+    }
+    int errors = ErrorUtil.errorCount();
+    CompilationUnit unit = parser.parse(input);
+    if (ErrorUtil.errorCount() > errors) {
+      int newErrorCount = ErrorUtil.errorCount() - errors;
+      String info = String.format(
+          "%d test compilation error%s", newErrorCount, (newErrorCount == 1 ? "" : "s"));
+      failWithMessages(info, ErrorUtil.getErrorMessages().subList(errors, ErrorUtil.errorCount()));
+    }
+    return unit;
+  }
+
+  /**
+   * Compiles Java source to a JVM class file.
+   *
+   * @param typeName the name of the type being declared
+   * @param source the source code
+   * @param flags which javac flags to use
+   * @return the InputFile defining the class file
+   */
+  protected InputFile createClassFile(String typeName, String source, String... flags)
+      throws IOException {
+    String path = typeNameToSource(typeName);
+    File srcFile = new File(tempDir, path);
+    srcFile.getParentFile().mkdirs();
+    try (FileWriter fw = new FileWriter(srcFile)) {
+      fw.write(source);
+    }
+
+    List<String> args = new ArrayList<>(Arrays.asList(flags));
+    String tempPath = tempDir.getAbsolutePath();
+    if (!args.contains("-d")) {
+      args.add("-d");
+      args.add(tempPath);
+    }
+    if (!args.contains("-classpath") && !args.contains("-cp")) {
+      args.add("-classpath");
+      List<String> classpath = getComGoogleDevtoolsJ2objcPath();
+      classpath.add(0, tempPath);
+      args.add(String.join(":", classpath));
+    }
+    if (options.emitLineDirectives() && !args.contains("-g")) {
+      args.add("-g");
+    }
+    args.add(srcFile.getPath());
+
+    JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+    ByteArrayOutputStream errOut = new ByteArrayOutputStream();
+    int numErrors = compiler.run(null, null, errOut, args.toArray(new String[0]));
+    if (numErrors > 0) {
+      String errMsg = errOut.toString();
+      ErrorUtil.error(errMsg);
+      failWithMessages("test compilation error" + (numErrors > 1 ? "s" : ""),
+          Lists.newArrayList(errMsg));
+      return null;
+    }
+    File classFile = new File(tempDir, path.replace(".java", ".class"));
+    assertTrue(classFile.exists());
+
+    return new RegularInputFile(classFile.getAbsolutePath(), typeName);
   }
 
   protected static List<String> getComGoogleDevtoolsJ2objcPath() {
@@ -197,7 +307,13 @@ public class GenerationTest extends TestCase {
           throw new AssertionError("System doesn't have the default encoding");
         }
       }
+    } else {
+      // Use the classpath for Java 9+.
+      for (String path : Splitter.on(':').split(System.getProperty("java.class.path"))) {
+        classpath.add(path);
+      }
     }
+
     return classpath;
   }
 
@@ -308,6 +424,53 @@ public class GenerationTest extends TestCase {
   }
 
   /**
+   * Verify that two AST nodes are equal, by comparing their toString() outputs.
+   */
+  protected void assertEqualASTs(TreeNode first, TreeNode second) {
+    if (!first.toString().equals(second.toString())) {
+      fail("unmatched:\n" + first + "vs:\n" + second);
+    }
+  }
+
+  /**
+   * Verify that two AST nodes are equal excepting MethodDeclaration bodies, by comparing their
+   * signatures.
+   */
+  protected void assertEqualSignatures(TreeNode first, TreeNode second) {
+    String firstStr = SignatureASTPrinter.toString(first);
+    String secondStr = SignatureASTPrinter.toString(second);
+    if (!firstStr.equals(secondStr)) {
+      fail("unmatched:\n" + firstStr + "vs:\n" + secondStr);
+    }
+  }
+
+  /**
+   * Compiles Java source, as contained in a source file, and compares the parsed compilation units
+   * generated from the source and class files, while ignoring method bodies.
+   *
+   * @param type the public type being declared
+   * @param source the source code
+   */
+  protected void assertEqualSignatureSrcClassfile(String type, String source) throws IOException {
+    CompilationUnit srcUnit = compileType(type, source);
+    CompilationUnit classfileUnit = compileAsClassFile(type, source);
+    assertEqualSignatures(srcUnit, classfileUnit);
+  }
+
+  /**
+   * Compiles Java source, as contained in a source file, and compares the parsed compilation units
+   * generated from the source and class files.
+   *
+   * @param type the public type being declared
+   * @param source the source code
+   */
+  protected void assertEqualASTSrcClassfile(String type, String source) throws IOException {
+    CompilationUnit srcUnit = compileType(type, source);
+    CompilationUnit classfileUnit = compileAsClassFile(type, source);
+    assertEqualASTs(srcUnit, classfileUnit);
+  }
+
+  /**
    * Translate a Java method into a JDT DOM MethodDeclaration.  Although JDT
    * has support for parsing methods, it doesn't resolve them.  The statements
    * are therefore wrapped in a type declaration so they having bindings.
@@ -320,7 +483,7 @@ public class GenerationTest extends TestCase {
     unit.accept(new TreeVisitor() {
       @Override
       public boolean visit(MethodDeclaration node) {
-        String name = node.getName().getIdentifier();
+        String name = ElementUtil.getName(node.getExecutableElement());
         if (name.equals(NameTable.INIT_NAME)
             || name.equals(NameTable.FINALIZE_METHOD)
             || name.equals(NameTable.DEALLOC_METHOD)) {
@@ -343,7 +506,7 @@ public class GenerationTest extends TestCase {
    *                 which is either the Obj-C header or implementation file
    */
   protected String translateSourceFile(String typeName, String fileName) throws IOException {
-    String source = getTranslatedFile(typeName.replace('.', '/') + ".java");
+    String source = getTranslatedFile(typeNameToSource(typeName));
     return translateSourceFile(source, typeName, fileName);
   }
 
@@ -361,8 +524,25 @@ public class GenerationTest extends TestCase {
     return generateFromUnit(translateType(typeName, source), fileName);
   }
 
+  /**
+   * Compile Java source and translate the resulting class file, returning the
+   * contents of either the generated header or implementation file.
+   *
+   * @param source the Java source to compile
+   * @param typeName the name of the main type defined by this source file
+   * @param fileName the name of the file whose contents should be returned,
+   *                 which is either the Obj-C header or implementation file
+   */
+  protected String compileAndTranslateSourceFile(String source, String typeName, String fileName)
+      throws IOException {
+    CompilationUnit newUnit = compileAsClassFile(typeName, source);
+    TranslationProcessor.applyMutations(newUnit, deadCodeMap, TimeTracker.noop());
+    return generateFromUnit(newUnit, fileName);
+  }
+
   protected String generateFromUnit(CompilationUnit unit, String filename) throws IOException {
-    GenerationUnit genUnit = new GenerationUnit(unit.getSourceFilePath(), 1);
+    GenerationUnit genUnit = new GenerationUnit(unit.getSourceFilePath(), options);
+    genUnit.incrementInputs();
     genUnit.addCompilationUnit(unit);
     TranslationProcessor.generateObjectiveCSource(genUnit);
     return getTranslatedFile(filename);
@@ -370,32 +550,30 @@ public class GenerationTest extends TestCase {
 
   protected String translateCombinedFiles(String outputPath, String extension, String... sources)
       throws IOException {
-    List<RegularInputFile> inputFiles = Lists.newArrayList();
+    List<ProcessingContext> inputs = new ArrayList<>();
+    GenerationUnit genUnit = GenerationUnit.newCombinedJarUnit(outputPath + ".testfile", options);
     for (String sourceFile : sources) {
-      inputFiles.add(new RegularInputFile(tempDir + "/" + sourceFile, sourceFile));
+      inputs.add(new ProcessingContext(
+          new RegularInputFile(tempDir + "/" + sourceFile, sourceFile), genUnit));
     }
-    GenerationBatch batch = new GenerationBatch();
-    batch.addCombinedJar(outputPath + ".testfile", inputFiles);
-    List<ProcessingContext> inputs = batch.getInputs();
-    parser.setEnableDocComments(Options.docCommentsEnabled());
+    parser.setEnableDocComments(options.docCommentsEnabled());
     new InputFilePreprocessor(parser).processInputs(inputs);
-    new TranslationProcessor(parser, CodeReferenceMap.builder().build(), 
-        CodeReferenceMap.builder().build()).processInputs(inputs);
+    new TranslationProcessor(parser, CodeReferenceMap.builder().build()).processInputs(inputs);
     return getTranslatedFile(outputPath + extension);
   }
 
   protected void runPipeline(String... files) {
-    J2ObjC.run(Arrays.asList(files));
+    J2ObjC.run(Arrays.asList(files), options);
     assertErrorCount(0);
     assertWarningCount(0);
   }
 
   protected void loadHeaderMappings() {
-    Options.getHeaderMap().loadMappings();
+    options.getHeaderMap().loadMappings();
   }
 
   protected void preprocessFiles(String... fileNames) {
-    GenerationBatch batch = new GenerationBatch();
+    GenerationBatch batch = new GenerationBatch(options);
     for (String fileName : fileNames) {
       batch.addSource(new RegularInputFile(
           tempDir.getPath() + File.separatorChar + fileName, fileName));
@@ -406,8 +584,17 @@ public class GenerationTest extends TestCase {
   protected String addSourceFile(String source, String fileName) throws IOException {
     File file = new File(tempDir, fileName);
     file.getParentFile().mkdirs();
-    Files.write(source, file, Options.getCharset());
+    Files.write(source, file, options.fileUtil().getCharset());
     return file.getPath();
+  }
+
+  /**
+   * Removes a file from the tmp directory,
+   */
+  protected void removeFile(String relativePath) throws IOException {
+    if (!new File(tempDir, relativePath).delete()) {
+      throw new IOException("failed deleting " + relativePath);
+    }
   }
 
   /**
@@ -417,7 +604,7 @@ public class GenerationTest extends TestCase {
   protected String getTranslatedFile(String fileName) throws IOException {
     File f = new File(tempDir, fileName);
     assertTrue(fileName + " not generated", f.exists());
-    return Files.toString(f, Options.getCharset());
+    return Files.toString(f, options.fileUtil().getCharset());
   }
 
   /**
@@ -488,7 +675,7 @@ public class GenerationTest extends TestCase {
   protected void addJarFile(String jarFileName, String... sources) throws IOException {
     File jarFile = getTempFile(jarFileName);
     jarFile.getParentFile().mkdirs();
-    Options.appendSourcePath(jarFile.getPath());
+    options.fileUtil().appendSourcePath(jarFile.getPath());
     JarOutputStream jar = new JarOutputStream(new FileOutputStream(jarFile));
     try {
       for (int i = 0; i < sources.length; i += 2) {
@@ -503,6 +690,24 @@ public class GenerationTest extends TestCase {
       jar.close();
     }
   }
+
+  /**
+   * Enables both javac and j2objc gidebugging support in a test.
+   */
+  protected void enableDebuggingSupport() {
+    javacFlags.add("-parameters");
+    javacFlags.add("-g");
+  }
+
+  protected boolean onJava9OrAbove() {
+    try {
+      Class.forName("java.lang.Module");
+      return true;
+    } catch (ClassNotFoundException e) {
+      return false;
+    }
+  }
+
 
   // Empty test so Bazel won't report a "no tests" error.
   public void testNothing() {}

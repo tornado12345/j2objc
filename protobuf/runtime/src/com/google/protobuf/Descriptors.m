@@ -41,6 +41,7 @@
 #import "com/google/protobuf/WireFormat.h"
 #import "java/lang/Boolean.h"
 #import "java/lang/Double.h"
+#import "java/lang/Enum.h"
 #import "java/lang/Float.h"
 #import "java/lang/IllegalArgumentException.h"
 #import "java/lang/Integer.h"
@@ -83,25 +84,55 @@ size_t CGPGetTypeSize(CGPFieldJavaType type) {
 #undef GET_TYPE_SIZE_CASE
 }
 
-void CGPInitDescriptor(
-    CGPDescriptor **pDescriptor, Class messageClass, Class builderClass, CGPMessageFlags flags,
-    size_t storageSize, jint fieldCount, CGPFieldData *fieldData) {
-  CGPFieldDescriptor *fieldsBuf[fieldCount];
-  for (jint i = 0; i < fieldCount; i++) {
-    fieldsBuf[i] = [[CGPFieldDescriptor alloc] initWithData:&fieldData[i]];
-  }
-  IOSObjectArray *fields = [IOSObjectArray arrayWithObjects:fieldsBuf count:fieldCount
+IOSObjectArray *CreateFields(
+    jint fieldCount, CGPFieldData *fieldData, CGPDescriptor *containingType) {
+  IOSObjectArray *fields = [IOSObjectArray newArrayWithLength:fieldCount
       type:ComGoogleProtobufDescriptors_FieldDescriptor_class_()];
-  CGPDescriptor *descriptor = [[CGPDescriptor alloc]
+  CGPFieldDescriptor **fieldsBuf = fields->buffer_;
+  for (jint i = 0; i < fieldCount; i++) {
+    fieldsBuf[i] = [[CGPFieldDescriptor alloc] initWithData:&fieldData[i]
+                                             containingType:containingType];
+  }
+  return fields;
+}
+
+CGPDescriptor *CGPInitDescriptor(
+    Class messageClass, Class builderClass, CGPMessageFlags flags,
+    size_t storageSize) {
+  return [[CGPDescriptor alloc]
       initWithMessageClass:messageClass
               builderClass:builderClass
                      flags:flags
-               storageSize:storageSize
-                    fields:fields];
-  *pDescriptor = descriptor;
-  for (CGPFieldDescriptor *field in descriptor->fields_) {
-    CGPFieldFixDefaultValue(field);
+               storageSize:storageSize];
+}
+
+void CGPInitFields(
+    CGPDescriptor *descriptor, jint fieldCount, CGPFieldData *fieldData,
+    jint oneofCount, CGPOneofData *oneofData) {
+  descriptor->fields_ = CreateFields(fieldCount, fieldData, descriptor);
+
+  if (oneofCount > 0) {
+    IOSObjectArray *oneofs = [IOSObjectArray newArrayWithLength:oneofCount
+        type:ComGoogleProtobufDescriptors_OneofDescriptor_class_()];
+    CGPFieldDescriptor **fieldsBuf = descriptor->fields_->buffer_;
+    for (jint i = 0; i < oneofCount; i++) {
+      CGPOneofDescriptor *newOneof = [[CGPOneofDescriptor alloc] initWithData:&oneofData[i]
+                                                               containingType:descriptor];
+      oneofs->buffer_[i] = newOneof;
+      uint32_t firstFieldIdx = oneofData[i].firstFieldIdx;
+      uint32_t lastFieldIdx = firstFieldIdx + oneofData[i].fieldCount;
+      for (uint32_t j = firstFieldIdx; j < lastFieldIdx; j++) {
+        fieldsBuf[j]->containingOneof_ = newOneof;
+      }
+    }
+    descriptor->oneofs_ = oneofs;
   }
+}
+
+CGPDescriptor *NewMapEntryDescriptor(CGPFieldData *fieldData) {
+  CGPDescriptor *descriptor = [[CGPDescriptor alloc] init];
+  descriptor->fields_ = CreateFields(2, fieldData, descriptor);
+  return descriptor;
 }
 
 CGPEnumDescriptor *CGPInitializeEnumType(
@@ -127,8 +158,8 @@ CGPEnumDescriptor *CGPInitializeEnumType(
     // Construct the Java enum instance.
     JavaLangEnum<ComGoogleProtobufProtocolMessageEnum> *newEnum =
         objc_constructInstance(enumClass, (void *)enumPtr);
-    [newEnum initWithNSString:names[i] withInt:i];
-    *(int *)(enumPtr + valueOffset) = intValues[i];
+    JavaLangEnum_initWithNSString_withInt_(newEnum, names[i], i);
+    *(jint *)(enumPtr + valueOffset) = intValues[i];
     values[i] = newEnum;
     enumPtr += enumSize;
 
@@ -147,6 +178,25 @@ CGPEnumDescriptor *CGPInitializeEnumType(
   return [enumDesc initWithValueOffset:valueOffset retainedValues:valuesArray];
 }
 
+void CGPInitializeOneofCaseEnum(
+    Class enumClass, jint valuesCount, JavaLangEnum<ComGoogleProtobufInternal_EnumLite> **values,
+    NSString **names, jint *intValues) {
+  Ivar valueIvar = class_getInstanceVariable(enumClass, "value_");
+  ptrdiff_t valueOffset = ivar_getOffset(valueIvar);
+
+  size_t enumSize = class_getInstanceSize(enumClass);
+  uintptr_t enumPtr = (uintptr_t)calloc(valuesCount, enumSize);
+
+  for (jint i = 0; i < valuesCount; i++) {
+    JavaLangEnum<ComGoogleProtobufInternal_EnumLite> *newEnum =
+        objc_constructInstance(enumClass, (void *)enumPtr);
+    JavaLangEnum_initWithNSString_withInt_(newEnum, names[i], i);
+    *(jint *)(enumPtr + valueOffset) = intValues[i];
+    values[i] = newEnum;
+    enumPtr += enumSize;
+  }
+}
+
 static inline ComGoogleProtobufDescriptors_FieldDescriptor_Type *GetTypeObj(CGPFieldType type) {
   ComGoogleProtobufDescriptors_FieldDescriptor_Type_initialize();
   return ComGoogleProtobufDescriptors_FieldDescriptor_Type_values_[type];
@@ -157,14 +207,12 @@ static inline ComGoogleProtobufDescriptors_FieldDescriptor_Type *GetTypeObj(CGPF
 - (instancetype)initWithMessageClass:(Class)messageClass
                         builderClass:(Class)builderClass
                                flags:(CGPMessageFlags)flags
-                         storageSize:(size_t)storageSize
-                              fields:(IOSObjectArray *)fields {
+                         storageSize:(size_t)storageSize {
   if (self = [self init]) {
     messageClass_ = messageClass;
     builderClass_ = builderClass;
     flags_ = flags;
     storageSize_ = storageSize;
-    fields_ = [fields retain];
     defaultInstance_ = CGPNewMessage(self);
   }
   return self;
@@ -172,6 +220,10 @@ static inline ComGoogleProtobufDescriptors_FieldDescriptor_Type *GetTypeObj(CGPF
 
 - (id<JavaUtilList>)getFields {
   return [JavaUtilArrays asListWithNSObjectArray:fields_];
+}
+
+- (id<JavaUtilList>)getOneofs {
+  return [JavaUtilArrays asListWithNSObjectArray:oneofs_];
 }
 
 - (CGPFieldDescriptor *)findFieldByNumberWithInt:(jint)fieldId {
@@ -189,6 +241,21 @@ static inline ComGoogleProtobufDescriptors_FieldDescriptor_Type *GetTypeObj(CGPF
 J2OBJC_ETERNAL_SINGLETON
 
 @end
+
+int SerializationOrderComp(const void *a, const void *b) {
+  return CGPFieldGetNumber(*(const CGPFieldDescriptor **)a) -
+      CGPFieldGetNumber(*(const CGPFieldDescriptor **)b);
+}
+
+IOSObjectArray *CGPGetSerializationOrderFields(CGPDescriptor *descriptor) {
+  IOSObjectArray *result = descriptor->serializationOrderFields_;
+  if (!result) {
+    result = [descriptor->fields_ copyWithZone:nil];
+    qsort(result->buffer_, result->size_, sizeof(id), SerializationOrderComp);
+    descriptor->serializationOrderFields_ = result;
+  }
+  return result;
+}
 
 J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufDescriptors_Descriptor)
 
@@ -216,12 +283,69 @@ static ComGoogleProtobufDescriptorProtos_FieldOptions *InitFieldOptions(const ch
   return msg;
 }
 
-- (instancetype)initWithData:(CGPFieldData *)data {
+// Default values for enums and message types can't be assigned in static data.
+static void CGPFieldFixDefaultValue(CGPFieldDescriptor *descriptor) {
+  CGPFieldData *data = descriptor->data_;
+  switch (descriptor->javaType_) {
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_LONG:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_FLOAT:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_DOUBLE:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BOOLEAN:
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_STRING:
+      break;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM:
+      {
+        Class enumClass = data->objcType;
+        NSCAssert(enumClass != nil, @"Field data is missing objc enum type.");
+        CGPEnumDescriptor *enumDescriptor = [enumClass performSelector:@selector(getDescriptor)];
+        CGPEnumValueDescriptor *valueDescriptor =
+            IOSObjectArray_Get(enumDescriptor->values_, data->defaultValue.valueInt);
+        data->defaultValue.valueId = valueDescriptor->enum_;
+        descriptor->valueType_ = enumDescriptor;
+        break;
+      }
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING:
+      if (data->defaultValue.valueId == nil) {
+        data->defaultValue.valueId = ComGoogleProtobufByteString_get_EMPTY();
+      } else {
+        // Default byte string data is written to static data as a length
+        // prefixed c-string.
+        const uint8_t *rawBytes = (const uint8_t *)data->defaultValue.valueId;
+        uint32_t length = *((uint32_t *)rawBytes);
+        // The length is stored in network byte order.
+        length = ntohl(length);
+        rawBytes += sizeof(length);
+        CGPByteString *byteString = CGPNewByteString(length);
+        memcpy(byteString->buffer_, rawBytes, length);
+        data->defaultValue.valueId = byteString;
+      }
+      break;
+    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE:
+      {
+        if (CGPFieldIsMap(descriptor)) {
+          descriptor->valueType_ = NewMapEntryDescriptor(data->mapEntryFields);
+          break;
+        }
+        Class msgClass = data->objcType;
+        NSCAssert(msgClass != nil, @"Field data is missing objc message type.");
+        CGPDescriptor *msgDescriptor = [msgClass performSelector:@selector(getDescriptor)];
+        data->defaultValue.valueId = msgDescriptor->defaultInstance_;
+        descriptor->valueType_ = msgDescriptor;
+        break;
+      }
+  }
+}
+
+- (instancetype)initWithData:(CGPFieldData *)data
+              containingType:(CGPDescriptor *)containingType {
   if (self = [self init]) {
     data_ = data;
     tag_ = TagFromData(data);
     javaType_ = [GetTypeObj(data->type)->javaType_ ordinal];
     fieldOptions_ = InitFieldOptions(data->optionsData);
+    containingType_ = containingType;
+    CGPFieldFixDefaultValue(self);
   }
   return self;
 }
@@ -257,6 +381,10 @@ static ComGoogleProtobufDescriptorProtos_FieldOptions *InitFieldOptions(const ch
 
 - (BOOL)isExtension {
   return data_->flags & CGPFieldFlagExtension;
+}
+
+- (CGPOneofDescriptor *)getContainingOneof {
+  return containingOneof_;
 }
 
 - (CGPDescriptor *)getMessageType {
@@ -306,60 +434,6 @@ id CGPFieldGetDefaultValue(CGPFieldDescriptor *field) {
 #undef GET_DEFAULT_VALUE_CASE
 }
 
-// Default values for enums and message types can't be assigned in static data.
-void CGPFieldFixDefaultValue(CGPFieldDescriptor *descriptor) {
-  CGPFieldData *data = descriptor->data_;
-  switch (descriptor->javaType_) {
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_INT:
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_LONG:
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_FLOAT:
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_DOUBLE:
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BOOLEAN:
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_STRING:
-      break;
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_ENUM:
-      {
-        Class enumClass = objc_getClass(data->className);
-        CGPEnumDescriptor *enumDescriptor = [enumClass performSelector:@selector(getDescriptor)];
-        CGPEnumValueDescriptor *valueDescriptor =
-            IOSObjectArray_Get(enumDescriptor->values_, data->defaultValue.valueInt);
-        data->defaultValue.valueId = valueDescriptor->enum_;
-        descriptor->valueType_ = enumDescriptor;
-        break;
-      }
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_BYTE_STRING:
-      if (data->defaultValue.valueId == nil) {
-        data->defaultValue.valueId = ComGoogleProtobufByteString_get_EMPTY();
-      } else {
-        // Default byte string data is written to static data as a length
-        // prefixed c-string.
-        const uint8_t *rawBytes = (const uint8_t *)data->defaultValue.valueId;
-        uint32_t length = *((uint32_t *)rawBytes);
-        // The length is stored in network byte order.
-        length = ntohl(length);
-        rawBytes += sizeof(length);
-        CGPByteString *byteString = CGPNewByteString(length);
-        memcpy(byteString->buffer_, rawBytes, length);
-        data->defaultValue.valueId = byteString;
-      }
-      break;
-    case ComGoogleProtobufDescriptors_FieldDescriptor_JavaType_Enum_MESSAGE:
-      {
-        Class msgClass = objc_getClass(data->className);
-        CGPDescriptor *msgDescriptor = [msgClass performSelector:@selector(getDescriptor)];
-        data->defaultValue.valueId = msgDescriptor->defaultInstance_;
-        descriptor->valueType_ = msgDescriptor;
-        break;
-      }
-  }
-}
-
-CGPDescriptor *CGPFieldGetContainingType(CGPFieldDescriptor *field) {
-  Class msgClass = objc_getClass(field->data_->containingType);
-  NSCAssert(msgClass != nil, @"Containing message type not found.");
-  return [msgClass performSelector:@selector(getDescriptor)];
-}
-
 CGPEnumValueDescriptor *CGPEnumValueDescriptorFromInt(CGPEnumDescriptor *enumType, jint value) {
   NSUInteger count = enumType->values_->size_;
   CGPEnumValueDescriptor **valuesBuf = enumType->values_->buffer_;
@@ -407,6 +481,50 @@ J2OBJC_ETERNAL_SINGLETON
 @end
 
 J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufDescriptors_EnumValueDescriptor)
+
+@implementation ComGoogleProtobufDescriptors_OneofDescriptor
+
+- (instancetype)initWithData:(CGPOneofData *)data
+              containingType:(CGPDescriptor *)containingType {
+  if (self = [self init]) {
+    data_ = data;
+    containingType_ = containingType;
+  }
+  return self;
+}
+
+- (NSString *)getName {
+  return [NSString stringWithUTF8String:data_->name];
+}
+
+- (CGPDescriptor *)getContainingType {
+  return containingType_;
+}
+
+- (id<JavaUtilList>)getFields {
+  jint toIndex = data_->firstFieldIdx + data_->fieldCount;
+  return [[containingType_ getFields] subListWithInt:data_->firstFieldIdx withInt:toIndex];
+}
+
+J2OBJC_ETERNAL_SINGLETON
+
+@end
+
+J2OBJC_CLASS_TYPE_LITERAL_SOURCE(ComGoogleProtobufDescriptors_OneofDescriptor)
+
+Class<ComGoogleProtobufInternal_EnumLite> CGPOneofGetCaseClass(CGPOneofDescriptor *oneof) {
+  Class containingCls = oneof->containingType_->messageClass_;
+  const char *containingName = class_getName(containingCls);
+  size_t len = strlen(containingName) + strlen(oneof->data_->javaName) + 6;
+  char *clsName = (char *)malloc(len);
+  strcpy(clsName, containingName);
+  strcat(clsName, "_");
+  strcat(clsName, oneof->data_->javaName);
+  strcat(clsName, "Case");
+  Class<ComGoogleProtobufInternal_EnumLite> cls = objc_getClass(clsName);
+  free(clsName);
+  return cls;
+}
 
 // The remainder of this file is copied from the translation of the types
 // FieldDescriptor.Type and FieldDescriptor.JavaType in Descriptor.java.

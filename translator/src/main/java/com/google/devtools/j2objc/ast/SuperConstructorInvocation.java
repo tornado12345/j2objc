@@ -14,11 +14,11 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.ExecutablePair;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
-import org.eclipse.jdt.core.dom.IMethodBinding;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Node for a super constructor invocation. (i.e. "super(...);")
@@ -26,6 +26,7 @@ import org.eclipse.jdt.core.dom.IMethodBinding;
 public class SuperConstructorInvocation extends Statement {
 
   private ExecutablePair method = ExecutablePair.NULL;
+  private TypeMirror varargsType = null;
   private final ChildLink<Expression> expression = ChildLink.create(Expression.class, this);
   private final ChildList<Expression> arguments = ChildList.create(Expression.class, this);
 
@@ -34,6 +35,7 @@ public class SuperConstructorInvocation extends Statement {
   public SuperConstructorInvocation(SuperConstructorInvocation other) {
     super(other);
     method = other.getExecutablePair();
+    varargsType = other.getVarargsType();
     expression.copyFrom(other.getExpression());
     arguments.copyFrom(other.getArguments());
   }
@@ -47,10 +49,6 @@ public class SuperConstructorInvocation extends Statement {
     return Kind.SUPER_CONSTRUCTOR_INVOCATION;
   }
 
-  public IMethodBinding getMethodBinding() {
-    return (IMethodBinding) BindingConverter.unwrapTypeMirrorIntoBinding(method.type());
-  }
-
   public ExecutablePair getExecutablePair() {
     return method;
   }
@@ -62,6 +60,19 @@ public class SuperConstructorInvocation extends Statement {
 
   public ExecutableElement getExecutableElement() {
     return method.element();
+  }
+
+  public ExecutableType getExecutableType() {
+    return method.type();
+  }
+
+  public TypeMirror getVarargsType() {
+    return varargsType;
+  }
+
+  public SuperConstructorInvocation setVarargsType(TypeMirror type) {
+    varargsType = type;
+    return this;
   }
 
   public Expression getExpression() {

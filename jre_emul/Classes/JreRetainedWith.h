@@ -27,9 +27,9 @@
 // has a retain count at least two.
 FOUNDATION_EXPORT void JreRetainedWithInitialize(id parent, id value);
 
-// Checks the previous value of a @RetainedWith assignment. Throws
-// AssertionError if it is unsafe to reassign this value.
-FOUNDATION_EXPORT void JreRetainedWithCheckPreviousValue(id parent, id value);
+// Checks the previous value of a @RetainedWith assignment, possibly returning
+// it to normal behavior.
+FOUNDATION_EXPORT void JreRetainedWithHandlePreviousValue(id parent, id value);
 
 // Called during dealloc of the parent and before releasing the child.
 FOUNDATION_EXPORT void JreRetainedWithHandleDealloc(id parent, id child);
@@ -37,10 +37,12 @@ FOUNDATION_EXPORT void JreRetainedWithHandleDealloc(id parent, id child);
 // Internal only macro that hacks the @RetainedWith behavior to a child class
 // without needing to use class swizzling or associated objects. Must be
 // combined with @Weak or @WeakOuter on the parent reference.
-#define RETAINED_WITH_CHILD(PARENT_REF) \
+// NUM_REFS is the number of direct/indirect references to the child from
+// the parent.
+#define RETAINED_WITH_CHILD_NUM_REFS(PARENT_REF, NUM_REFS) \
   - (id)retain { \
     @synchronized (self) { \
-      if ([self retainCount] == 1) { \
+      if ([self retainCount] == NUM_REFS) { \
         [PARENT_REF retain]; \
       } \
       return [super retain]; \
@@ -48,11 +50,14 @@ FOUNDATION_EXPORT void JreRetainedWithHandleDealloc(id parent, id child);
   } \
   - (oneway void)release { \
     @synchronized (self) { \
-      if ([self retainCount] == 2) { \
+      if ([self retainCount] == NUM_REFS + 1) { \
         [PARENT_REF autorelease]; \
       } \
       [super release]; \
     } \
   }
+
+#define RETAINED_WITH_CHILD(PARENT_REF) \
+  RETAINED_WITH_CHILD_NUM_REFS(PARENT_REF, 1)
 
 #endif // JRE_RETAINED_WITH_H_

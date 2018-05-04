@@ -16,23 +16,23 @@
 
 package com.google.devtools.j2objc.gen;
 
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 import com.google.common.io.Files;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.types.Import;
 import com.google.devtools.j2objc.util.ErrorUtil;
 import com.google.devtools.j2objc.util.UnicodeUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 /**
  * Generates source files from AST types.  This class handles common actions
@@ -56,7 +56,7 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
     super(new SourceBuilder(emitLineDirectives));
     this.unit = unit;
     orderedTypes = getOrderedGeneratedTypes(unit);
-    typesByName = Maps.newHashMap();
+    typesByName = new HashMap<>();
     for (GeneratedType type : orderedTypes) {
       String name = type.getTypeName();
       if (name != null) {
@@ -92,7 +92,7 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
 
   protected void save(String path) {
     try {
-      File outputDirectory = Options.getOutputDirectory();
+      File outputDirectory = unit.options().fileUtil().getOutputDirectory();
       File outputFile = new File(outputDirectory, path);
       File dir = outputFile.getParentFile();
       if (dir != null && !dir.exists()) {
@@ -107,7 +107,7 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
         source += '\n';
       }
 
-      Files.write(source, outputFile, Options.getCharset());
+      Files.write(source, outputFile, unit.options().fileUtil().getCharset());
     } catch (IOException e) {
       ErrorUtil.error(e.getMessage());
     } finally {
@@ -119,7 +119,7 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
    *  not transpiled code. This method should be paired with popIgnoreDeprecatedDeclarationsPragma.
    */
   protected void pushIgnoreDeprecatedDeclarationsPragma() {
-    if (Options.generateDeprecatedDeclarations()) {
+    if (unit.options().generateDeprecatedDeclarations()) {
       newline();
       println("#pragma clang diagnostic push");
       println("#pragma GCC diagnostic ignored \"-Wdeprecated-declarations\"");
@@ -128,13 +128,13 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
 
   /** Restores deprecation warnings after a call to pushIgnoreDeprecatedDeclarationsPragma. */
   protected void popIgnoreDeprecatedDeclarationsPragma() {
-    if (Options.generateDeprecatedDeclarations()) {
+    if (unit.options().generateDeprecatedDeclarations()) {
       println("\n#pragma clang diagnostic pop");
     }
   }
 
   protected void printForwardDeclarations(Set<Import> forwardDecls) {
-    Set<String> forwardStmts = Sets.newTreeSet();
+    Set<String> forwardStmts = new TreeSet<>();
     for (Import imp : forwardDecls) {
       forwardStmts.add(createForwardDeclaration(imp.getTypeName(), imp.isInterface()));
     }
@@ -153,7 +153,7 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
   private static List<GeneratedType> getOrderedGeneratedTypes(GenerationUnit generationUnit) {
     // Ordered map because we iterate over it below.
     Collection<GeneratedType> generatedTypes = generationUnit.getGeneratedTypes();
-    LinkedHashMap<String, GeneratedType> typeMap = Maps.newLinkedHashMap();
+    LinkedHashMap<String, GeneratedType> typeMap = new LinkedHashMap<>();
     for (GeneratedType generatedType : generatedTypes) {
       String name = generatedType.getTypeName();
       if (name != null) {
@@ -162,24 +162,32 @@ public abstract class ObjectiveCSourceFileGenerator extends AbstractSourceGenera
       }
     }
 
-    LinkedHashSet<GeneratedType> orderedTypes = Sets.newLinkedHashSet();
+    LinkedHashSet<GeneratedType> orderedTypes = new LinkedHashSet<>();
+    LinkedHashSet<String> typeHierarchy = new LinkedHashSet<>();
 
     for (GeneratedType generatedType : generatedTypes) {
-      collectType(generatedType, orderedTypes, typeMap);
+      collectType(generatedType, orderedTypes, typeMap, typeHierarchy);
     }
 
-    return Lists.newArrayList(orderedTypes);
+    return new ArrayList<>(orderedTypes);
   }
 
   private static void collectType(
       GeneratedType generatedType, LinkedHashSet<GeneratedType> orderedTypes,
-      Map<String, GeneratedType> typeMap) {
+      Map<String, GeneratedType> typeMap, LinkedHashSet<String> typeHierarchy) {
+    typeHierarchy.add(generatedType.getTypeName());
     for (String superType : generatedType.getSuperTypes()) {
       GeneratedType requiredType = typeMap.get(superType);
       if (requiredType != null) {
-        collectType(requiredType, orderedTypes, typeMap);
+        if (typeHierarchy.contains(superType)) {
+          ErrorUtil.error("Duplicate type name found in "
+              + typeHierarchy.stream().collect(Collectors.joining("->")) + "->" + superType);
+          return;
+        }
+        collectType(requiredType, orderedTypes, typeMap, typeHierarchy);
       }
     }
+    typeHierarchy.remove(generatedType.getTypeName());
     orderedTypes.add(generatedType);
   }
 }

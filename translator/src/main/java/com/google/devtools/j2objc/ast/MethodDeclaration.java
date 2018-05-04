@@ -14,11 +14,10 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.util.ElementUtil;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
-import org.eclipse.jdt.core.dom.IMethodBinding;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Node type for a method declaration.
@@ -28,8 +27,7 @@ public class MethodDeclaration extends BodyDeclaration {
   private ExecutableElement executableElement = null;
   private boolean isConstructor = false;
   private boolean hasDeclaration = true;
-  private ChildLink<Type> returnType = ChildLink.create(Type.class, this);
-  private ChildLink<SimpleName> name = ChildLink.create(SimpleName.class, this);
+  private boolean isUnavailable = false;
   private ChildList<SingleVariableDeclaration> parameters =
       ChildList.create(SingleVariableDeclaration.class, this);
   private ChildLink<Block> body = ChildLink.create(Block.class, this);
@@ -41,26 +39,15 @@ public class MethodDeclaration extends BodyDeclaration {
     executableElement = other.getExecutableElement();
     isConstructor = other.isConstructor();
     hasDeclaration = other.hasDeclaration();
-    returnType.copyFrom(other.getReturnType());
-    name.copyFrom(other.getName());
+    isUnavailable = other.isUnavailable();
     parameters.copyFrom(other.getParameters());
     body.copyFrom(other.getBody());
-  }
-
-  public MethodDeclaration(IMethodBinding methodBinding) {
-    super(methodBinding);
-    executableElement = BindingConverter.getExecutableElement(methodBinding);
-    isConstructor = methodBinding.isConstructor();
-    returnType.set(Type.newType(methodBinding.getReturnType()));
-    name.set(new SimpleName(methodBinding));
   }
 
   public MethodDeclaration(ExecutableElement method) {
     super(method);
     executableElement = method;
     isConstructor = ElementUtil.isConstructor(method);
-    returnType.set(Type.newType(method.getReturnType()));
-    name.set(new SimpleName(method));
   }
 
   @Override
@@ -68,16 +55,8 @@ public class MethodDeclaration extends BodyDeclaration {
     return Kind.METHOD_DECLARATION;
   }
 
-  public IMethodBinding getMethodBinding() {
-    return BindingConverter.unwrapExecutableElement(executableElement);
-  }
-
   public ExecutableElement getExecutableElement() {
     return executableElement;
-  }
-
-  public void setMethodBinding(IMethodBinding newMethodBinding) {
-    executableElement = BindingConverter.getExecutableElement(newMethodBinding);
   }
 
   public MethodDeclaration setExecutableElement(ExecutableElement newElement) {
@@ -103,22 +82,17 @@ public class MethodDeclaration extends BodyDeclaration {
     return this;
   }
 
-  public Type getReturnType() {
-    return returnType.get();
+  public boolean isUnavailable() {
+    return isUnavailable;
   }
 
-  public MethodDeclaration setReturnType(Type newType) {
-    returnType.set(newType);
+  public MethodDeclaration setUnavailable(boolean value) {
+    isUnavailable = value;
     return this;
   }
 
-  public SimpleName getName() {
-    return name.get();
-  }
-
-  public MethodDeclaration setName(SimpleName newName) {
-    name.set(newName);
-    return this;
+  public TypeMirror getReturnTypeMirror() {
+    return executableElement.getReturnType();
   }
 
   public SingleVariableDeclaration getParameter(int index) {
@@ -143,8 +117,6 @@ public class MethodDeclaration extends BodyDeclaration {
     if (visitor.visit(this)) {
       javadoc.accept(visitor);
       annotations.accept(visitor);
-      returnType.accept(visitor);
-      name.accept(visitor);
       parameters.accept(visitor);
       body.accept(visitor);
     }

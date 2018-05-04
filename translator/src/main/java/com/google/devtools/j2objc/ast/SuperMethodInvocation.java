@@ -14,13 +14,11 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import com.google.devtools.j2objc.types.ExecutablePair;
 import java.util.List;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeMirror;
-import org.eclipse.jdt.core.dom.IMethodBinding;
 
 /**
  * Node type for a method invocation on the super class. (e.g. "super.foo()")
@@ -28,41 +26,30 @@ import org.eclipse.jdt.core.dom.IMethodBinding;
 public class SuperMethodInvocation extends Expression {
 
   private ExecutablePair method = ExecutablePair.NULL;
-  private ChildLink<Name> qualifier = ChildLink.create(Name.class, this);
-  private ChildLink<SimpleName> name = ChildLink.create(SimpleName.class, this);
+  private TypeMirror varargsType = null;
+  private final ChildLink<Name> qualifier = ChildLink.create(Name.class, this);
   // Resolved by OuterReferenceResolver.
-  private ChildLink<Expression> receiver = ChildLink.create(Expression.class, this);
-  private ChildList<Expression> arguments = ChildList.create(Expression.class, this);
+  private final ChildLink<Expression> receiver = ChildLink.create(Expression.class, this);
+  private final ChildList<Expression> arguments = ChildList.create(Expression.class, this);
 
   public SuperMethodInvocation() {}
 
   public SuperMethodInvocation(SuperMethodInvocation other) {
     super(other);
     method = other.getExecutablePair();
+    varargsType = other.getVarargsType();
     qualifier.copyFrom(other.getQualifier());
-    name.copyFrom(other.getName());
     receiver.copyFrom(other.getReceiver());
     arguments.copyFrom(other.getArguments());
   }
 
-  public SuperMethodInvocation(IMethodBinding methodBinding) {
-    this(new ExecutablePair(
-        BindingConverter.getExecutableElement(methodBinding),
-        BindingConverter.getType(methodBinding)));
-  }
-
   public SuperMethodInvocation(ExecutablePair method) {
     this.method = method;
-    name.set(new SimpleName(method.element()));
   }
 
   @Override
   public Kind getKind() {
     return Kind.SUPER_METHOD_INVOCATION;
-  }
-
-  public IMethodBinding getMethodBinding() {
-    return (IMethodBinding) BindingConverter.unwrapTypeMirrorIntoBinding(getExecutableType());
   }
 
   public ExecutablePair getExecutablePair() {
@@ -87,21 +74,21 @@ public class SuperMethodInvocation extends Expression {
     return getExecutableType().getReturnType();
   }
 
+  public TypeMirror getVarargsType() {
+    return varargsType;
+  }
+
+  public SuperMethodInvocation setVarargsType(TypeMirror type) {
+    varargsType = type;
+    return this;
+  }
+
   public Name getQualifier() {
     return qualifier.get();
   }
 
   public SuperMethodInvocation setQualifier(Name newQualifier) {
     qualifier.set(newQualifier);
-    return this;
-  }
-
-  public SimpleName getName() {
-    return name.get();
-  }
-
-  public SuperMethodInvocation setName(SimpleName newName) {
-    name.set(newName);
     return this;
   }
 
@@ -127,7 +114,6 @@ public class SuperMethodInvocation extends Expression {
   protected void acceptInner(TreeVisitor visitor) {
     if (visitor.visit(this)) {
       qualifier.accept(visitor);
-      name.accept(visitor);
       receiver.accept(visitor);
       arguments.accept(visitor);
     }

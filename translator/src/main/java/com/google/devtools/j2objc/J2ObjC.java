@@ -18,9 +18,7 @@ package com.google.devtools.j2objc;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
-import com.google.common.io.Files;
 import com.google.devtools.j2objc.Options.TimingLevel;
-import com.google.devtools.j2objc.pipeline.AnnotationPreProcessor;
 import com.google.devtools.j2objc.pipeline.GenerationBatch;
 import com.google.devtools.j2objc.pipeline.InputFilePreprocessor;
 import com.google.devtools.j2objc.pipeline.ProcessingContext;
@@ -33,9 +31,8 @@ import com.google.devtools.j2objc.util.ProGuardUsageParser;
 import com.google.devtools.j2objc.util.UnicodeUtils;
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.Charset;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Translation tool for generating Objective C source files from Java sources.
@@ -60,9 +57,9 @@ public class J2ObjC {
     return UnicodeUtils.format(Options.getFileHeader(), sourceFileName);
   }
 
-  private static void checkErrors() {
+  private static void checkErrors(boolean treatWarningsAsErrors) {
     int errors = ErrorUtil.errorCount();
-    if (Options.treatWarningsAsErrors()) {
+    if (treatWarningsAsErrors) {
       errors += ErrorUtil.warningCount();
     }
     if (errors > 0) {
@@ -71,58 +68,42 @@ public class J2ObjC {
   }
 
   @VisibleForTesting
-  public static Parser createParser() {
-    Parser parser = Options.newParser();
-    parser.addClasspathEntries(Options.getClassPathEntries());
-    parser.addClasspathEntries(Options.getBootClasspath());
-    parser.addSourcepathEntries(Options.getSourcePathEntries());
+  public static Parser createParser(Options options) {
+    Parser parser = Parser.newParser(options);
+    parser.addClasspathEntries(options.fileUtil().getClassPathEntries());
+    parser.addClasspathEntries(options.getBootClasspath());
+    parser.addSourcepathEntries(options.fileUtil().getSourcePathEntries());
     parser.setIncludeRunningVMBootclasspath(false);
-    parser.setEncoding(Options.fileEncoding());
-    parser.setEnableDocComments(Options.docCommentsEnabled());
+    parser.setEnableDocComments(options.docCommentsEnabled());
     return parser;
   }
 
   private static CodeReferenceMap loadDeadCodeMap() {
-    return parseDeadCodeFile(Options.getProGuardUsageFile());
-  }
-  
-  private static CodeReferenceMap loadTreeShakerMap() {
-    return parseDeadCodeFile(Options.getTreeShakerUsageFile());
-  }
-
-  private static CodeReferenceMap parseDeadCodeFile(File file) {
-    if (file != null) {
-      try {
-        return ProGuardUsageParser.parse(Files.asCharSource(file, Charset.defaultCharset()));
-      } catch (IOException e) {
-        throw new AssertionError(e);
-      }
-    }
-    return null;
+    return ProGuardUsageParser.parseDeadCodeFile(Options.getProGuardUsageFile());
   }
 
   /**
    * Runs the entire J2ObjC pipeline.
    * @param fileArgs the files to process, same format as command-line args to {@link #main}.
    */
-  public static void run(List<String> fileArgs) {
+  public static void run(List<String> fileArgs, Options options) {
     File preProcessorTempDir = null;
     File strippedSourcesDir = null;
+    Parser parser = null;
     try {
-      Parser parser = createParser();
-
       List<ProcessingContext> inputs = Lists.newArrayList();
-      GenerationBatch batch = new GenerationBatch();
+      GenerationBatch batch = new GenerationBatch(options);
       batch.processFileArgs(fileArgs);
       inputs.addAll(batch.getInputs());
       if (ErrorUtil.errorCount() > 0) {
         return;
       }
 
-      AnnotationPreProcessor preProcessor = new AnnotationPreProcessor();
-      List<ProcessingContext> generatedInputs = preProcessor.process(fileArgs, inputs);
+      parser = createParser(options);
+      Parser.ProcessingResult processingResult = parser.processAnnotations(fileArgs, inputs);
+      List<ProcessingContext> generatedInputs = processingResult.getGeneratedSources();
       inputs.addAll(generatedInputs); // Ensure all generatedInputs are at end of input list.
-      preProcessorTempDir = preProcessor.getTemporaryDirectory();
+      preProcessorTempDir = processingResult.getSourceOutputDirectory();
       if (ErrorUtil.errorCount() > 0) {
         return;
       }
@@ -140,9 +121,9 @@ public class J2ObjC {
         parser.prependSourcepathEntry(strippedSourcesDir.getPath());
       }
 
-      Options.getHeaderMap().loadMappings();
+      options.getHeaderMap().loadMappings();
       TranslationProcessor translationProcessor =
-          new TranslationProcessor(parser, loadDeadCodeMap(), loadTreeShakerMap());
+          new TranslationProcessor(parser, loadDeadCodeMap());
       translationProcessor.processInputs(inputs);
       translationProcessor.processBuildClosureDependencies();
       if (ErrorUtil.errorCount() > 0) {
@@ -150,8 +131,19 @@ public class J2ObjC {
       }
       translationProcessor.postProcess();
 
-      Options.getHeaderMap().printMappings();
+      options.getHeaderMap().printMappings();
     } finally {
+      if (parser != null) {
+        try {
+          parser.close();
+        } catch (IOException e) {
+          ErrorUtil.error(e.getMessage());
+        }
+      }
+      Set<String> tempDirs = options.fileUtil().getTempDirs();
+      for (String dir : tempDirs) {
+        FileUtil.deleteTempDir(new File(dir));
+      }
       FileUtil.deleteTempDir(preProcessorTempDir);
       FileUtil.deleteTempDir(strippedSourcesDir);
     }
@@ -169,10 +161,12 @@ public class J2ObjC {
     }
     long startTime = System.currentTimeMillis();
 
-    String[] files = null;
+    List<String> files = null;
+    Options options = new Options();
+
     try {
-      files = Options.load(args);
-      if (files.length == 0) {
+      files = options.load(args);
+      if (files.isEmpty()) {
         Options.usage("no source files");
       }
     } catch (IOException e) {
@@ -180,14 +174,14 @@ public class J2ObjC {
       System.exit(1);
     }
 
-    run(Arrays.asList(files));
+    run(files, options);
 
-    TimingLevel timingLevel = Options.timingLevel();
+    TimingLevel timingLevel = options.timingLevel();
     if (timingLevel == TimingLevel.TOTAL || timingLevel == TimingLevel.ALL) {
       System.out.printf("j2objc execution time: %d ms\n", System.currentTimeMillis() - startTime);
     }
 
     // Run last, since it calls System.exit() with the number of errors.
-    checkErrors();
+    checkErrors(options.treatWarningsAsErrors());
   }
 }

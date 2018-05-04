@@ -14,7 +14,7 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.types.Types;
+import com.google.devtools.j2objc.util.TypeUtil;
 import javax.lang.model.type.TypeMirror;
 
 /**
@@ -22,21 +22,19 @@ import javax.lang.model.type.TypeMirror;
  */
 public class BooleanLiteral extends Expression {
 
-  private boolean booleanValue = false;
   private final TypeMirror typeMirror;
 
   public BooleanLiteral(BooleanLiteral other) {
     super(other);
-    booleanValue = other.booleanValue();
-    typeMirror = other.getTypeMirror();
+    this.typeMirror = other.getTypeMirror();
   }
 
-  public BooleanLiteral(boolean booleanValue, Types typeEnv) {
-    this(booleanValue, typeEnv.resolveJavaTypeMirror("boolean"));
+  public BooleanLiteral(boolean booleanValue, TypeUtil typeUtil) {
+    this(booleanValue, typeUtil.getBoolean());
   }
 
   public BooleanLiteral(boolean booleanValue, TypeMirror typeMirror) {
-    this.booleanValue = booleanValue;
+    this.constantValue = booleanValue;
     this.typeMirror = typeMirror;
   }
 
@@ -49,12 +47,19 @@ public class BooleanLiteral extends Expression {
   public TypeMirror getTypeMirror() {
     return typeMirror;
   }
+
   public boolean booleanValue() {
-    return booleanValue;
+    return (Boolean) constantValue;
   }
 
   public void setBooleanValue(boolean newBooleanValue) {
-    booleanValue = newBooleanValue;
+    constantValue = newBooleanValue;
+  }
+
+  @Override
+  public BooleanLiteral setConstantValue(Object value) {
+    assert value == null || value instanceof Boolean;
+    return (BooleanLiteral) super.setConstantValue(value);
   }
 
   @Override

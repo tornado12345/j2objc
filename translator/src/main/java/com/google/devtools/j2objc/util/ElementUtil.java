@@ -17,39 +17,43 @@ package com.google.devtools.j2objc.util;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import com.google.devtools.j2objc.jdt.BindingConverter;
+import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.types.GeneratedElement;
 import com.google.devtools.j2objc.types.GeneratedExecutableElement;
+import com.google.devtools.j2objc.types.GeneratedTypeElement;
 import com.google.devtools.j2objc.types.GeneratedVariableElement;
-import com.google.devtools.j2objc.types.IOSMethodBinding;
 import com.google.devtools.j2objc.types.LambdaTypeElement;
+import com.google.j2objc.annotations.Property;
 import com.google.j2objc.annotations.RetainedWith;
 import com.sun.tools.javac.code.Flags;
 import com.sun.tools.javac.code.Symbol;
+import com.sun.tools.javac.code.Symbol.ClassSymbol;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.regex.Pattern;
+import javax.annotation.ParametersAreNonnullByDefault;
+import javax.lang.model.AnnotatedConstruct;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.Name;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
-import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
-import org.eclipse.jdt.core.dom.IBinding;
-import org.eclipse.jdt.core.dom.IMethodBinding;
-import org.eclipse.jdt.core.dom.IVariableBinding;
+import javax.tools.JavaFileObject;
 
 /**
  * Utility methods for working with elements.
@@ -73,16 +77,20 @@ public final class ElementUtil {
   private static final Set<Modifier> VISIBILITY_MODIFIERS = EnumSet.of(
       Modifier.PUBLIC, Modifier.PROTECTED, Modifier.PRIVATE);
 
-  private final Elements javacElements;
+  private static final String LAZY_INIT = "com.google.errorprone.annotations.concurrent.LazyInit";
 
-  private static final Map<Integer, Set<Modifier>> modifierSets = new HashMap<>();
+  private final Elements javacElements;
+  private final Map<Element, TypeMirror> elementTypeMap = new HashMap<>();
 
   public ElementUtil(Elements javacElements) {
     this.javacElements = javacElements;
   }
 
   public static String getName(Element element) {
-    return element.getSimpleName().toString();
+    // Always return qualified package names.
+    Name name = element.getKind() == ElementKind.PACKAGE
+        ? ((PackageElement) element).getQualifiedName() : element.getSimpleName();
+    return name.toString();
   }
 
   public static String getQualifiedName(TypeElement element) {
@@ -117,7 +125,24 @@ public final class ElementUtil {
   }
 
   public static boolean isVolatile(VariableElement element) {
-    return hasModifier(element, Modifier.VOLATILE);
+    return hasModifier(element, Modifier.VOLATILE)
+        // Upgrade reference type fields marked with error prone's LazyInit because this indicates
+        // an intentional racy init.
+        || (!element.asType().getKind().isPrimitive()
+            && hasQualifiedNamedAnnotation(element, LAZY_INIT));
+  }
+
+  public static boolean isTopLevel(TypeElement type) {
+    return type.getNestingKind() == NestingKind.TOP_LEVEL;
+  }
+
+  public static boolean isAnonymous(TypeElement type) {
+    return type.getNestingKind() == NestingKind.ANONYMOUS;
+  }
+
+  public static boolean isLocal(TypeElement type) {
+    NestingKind nestingKind = type.getNestingKind();
+    return nestingKind == NestingKind.ANONYMOUS || nestingKind == NestingKind.LOCAL;
   }
 
   public static boolean isLambda(TypeElement type) {
@@ -128,8 +153,16 @@ public final class ElementUtil {
     return type.getKind() == ElementKind.INTERFACE;
   }
 
+  public static boolean isAnnotationType(Element type) {
+    return type.getKind() == ElementKind.ANNOTATION_TYPE;
+  }
+
   public static boolean isEnum(Element e) {
     return e.getKind() == ElementKind.ENUM;
+  }
+
+  public static boolean isEnumConstant(Element e) {
+    return e.getKind() == ElementKind.ENUM_CONSTANT;
   }
 
   public static boolean isPackage(Element e) {
@@ -146,6 +179,16 @@ public final class ElementUtil {
     return kind == ElementKind.CONSTRUCTOR || kind == ElementKind.METHOD;
   }
 
+  public static boolean isTypeParameterElement(Element e) {
+    return e.getKind() == ElementKind.TYPE_PARAMETER;
+  }
+
+  public static boolean isAnnotationMember(ExecutableElement e) {
+    return isAnnotationType(getDeclaringClass(e));
+  }
+
+  //TODO(malvania): For elements inside static blocks, this method returns a "TypeElement" of a
+  //  static block, which does not work with getBinaryName(TypeElement) (one proven example)
   public static TypeElement getDeclaringClass(Element element) {
     do {
       element = element.getEnclosingElement();
@@ -154,8 +197,12 @@ public final class ElementUtil {
   }
 
   public static TypeElement getSuperclass(TypeElement element) {
-    DeclaredType superClass = (DeclaredType) element.getSuperclass();
-    return superClass != null ? (TypeElement) superClass.asElement() : null;
+    return TypeUtil.asTypeElement(element.getSuperclass());
+  }
+
+  public static List<TypeElement> getInterfaces(TypeElement element) {
+    return Lists.newArrayList(Iterables.transform(
+        element.getInterfaces(), i -> TypeUtil.asTypeElement(i)));
   }
 
   public static boolean isPrimitiveConstant(VariableElement element) {
@@ -163,6 +210,14 @@ public final class ElementUtil {
         && element.getConstantValue() != null
         // Exclude local variables declared final.
         && element.getKind().isField();
+  }
+
+  public static boolean isConstant(VariableElement element) {
+    Object constantValue = element.getConstantValue();
+    return constantValue != null
+        && (element.asType().getKind().isPrimitive()
+            || (constantValue instanceof String
+                && UnicodeUtils.hasValidCppCharacters((String) constantValue)));
   }
 
   public static boolean isStringConstant(VariableElement element) {
@@ -186,10 +241,13 @@ public final class ElementUtil {
   }
 
   public static boolean isNonnull(VariableElement element) {
-    if (element instanceof GeneratedVariableElement) {
-      return ((GeneratedVariableElement) element).isNonnull();
-    }
-    return BindingUtil.isNonnull(BindingConverter.unwrapVariableElement(element));
+    return element instanceof GeneratedVariableElement
+        && ((GeneratedVariableElement) element).isNonnull();
+  }
+
+  public static String getTypeQualifiers(VariableElement element) {
+    return element instanceof GeneratedVariableElement
+        ? ((GeneratedVariableElement) element).getTypeQualifiers() : null;
   }
 
   public static boolean isAbstract(Element element) {
@@ -215,22 +273,20 @@ public final class ElementUtil {
     if (e instanceof Symbol) {
       return (((Symbol) e).flags() & Flags.SYNTHETIC) > 0;
     }
-    // TODO(tball): remove when javac switch is complete.
-    IBinding binding = BindingConverter.unwrapElement(e);
-    if (binding != null) {
-      return binding.isSynthetic();
-    }
     return false;
+  }
+
+  public static String getHeader(TypeElement e) {
+    return e instanceof GeneratedTypeElement ? ((GeneratedTypeElement) e).getHeader() : null;
+  }
+
+  public static boolean isIosType(TypeElement e) {
+    return e instanceof GeneratedTypeElement && ((GeneratedTypeElement) e).isIosType();
   }
 
   public static String getSelector(ExecutableElement e) {
     if (e instanceof GeneratedExecutableElement) {
       return ((GeneratedExecutableElement) e).getSelector();
-    }
-    // TODO(kstanger): Remove when javac switch is complete.
-    IMethodBinding binding = BindingConverter.unwrapExecutableElement(e);
-    if (binding instanceof IOSMethodBinding) {
-      return ((IOSMethodBinding) binding).getSelector();
     }
     return null;
   }
@@ -284,7 +340,15 @@ public final class ElementUtil {
   }
 
   public static boolean isField(Element element) {
-    return element.getKind().isField();
+    return element.getKind() == ElementKind.FIELD;
+  }
+
+  public static boolean isParameter(Element element) {
+    return element.getKind() == ElementKind.PARAMETER;
+  }
+
+  public static boolean isLocalVariable(Element element) {
+    return element.getKind() == ElementKind.LOCAL_VARIABLE;
   }
 
   public static boolean isMethod(Element element) {
@@ -299,25 +363,59 @@ public final class ElementUtil {
     return isMethod(element) && !isStatic(element);
   }
 
-  public static boolean isWeakReference(VariableElement varElement) {
-    IVariableBinding var = (IVariableBinding) BindingConverter.unwrapElement(varElement);
-    if (var.getName().startsWith("this$")
-        && BindingUtil.isWeakOuterAnonymousClass(var.getDeclaringClass())) {
-      return true;
+  public static boolean isWeakReference(VariableElement var) {
+    return hasNamedAnnotation(var, "Weak")
+        || hasWeakPropertyAttribute(var)
+        || (var instanceof GeneratedVariableElement && ((GeneratedVariableElement) var).isWeak());
+  }
+
+  public boolean isWeakOuterType(TypeElement type) {
+    if (type instanceof LambdaTypeElement) {
+      return ((LambdaTypeElement) type).isWeakOuter();
+    } else if (isAnonymous(type)) {
+      // TODO(kstanger): remove this block when javac conversion is complete.
+      // For anonymous classes we must check for a TYPE_USE annotation on the supertype used in the
+      // declaration. For example:
+      // Runnable r = new @WeakOuter Runnable() { ... };
+      TypeMirror superclass = type.getSuperclass();
+      if (superclass != null && hasNamedAnnotation(superclass, "WeakOuter")) {
+        return true;
+      }
+      for (TypeMirror intrface : type.getInterfaces()) {
+        if (hasNamedAnnotation(intrface, "WeakOuter")) {
+          return true;
+        }
+      }
+      if (elementTypeMap.containsKey(type)) {
+        return hasNamedAnnotation(elementTypeMap.get(type), "WeakOuter");
+      }
+      return hasNamedAnnotation(type.asType(), "WeakOuter");
+    } else {
+      return hasNamedAnnotation(type, "WeakOuter");
     }
-    return BindingUtil.hasNamedAnnotation(var, "Weak")
-        || BindingUtil.hasWeakPropertyAttribute(var)
-        || (var.getName().startsWith("this$")
-        && BindingUtil.hasNamedAnnotation(var.getDeclaringClass(), "WeakOuter"));
+  }
+
+  private static boolean hasWeakPropertyAttribute(VariableElement var) {
+    AnnotationMirror annotation = getAnnotation(var, Property.class);
+    return annotation != null && parsePropertyAttribute(annotation).contains("weak");
+  }
+
+  /**
+   * Returns the attributes of a Property annotation.
+   */
+  public static Set<String> parsePropertyAttribute(AnnotationMirror annotation) {
+    assert getName(annotation.getAnnotationType().asElement()).equals("Property");
+    String attributesStr = (String) getAnnotationValue(annotation, "value");
+    Set<String> attributes = new HashSet<>();
+    if (attributesStr != null) {
+      attributes.addAll(Arrays.asList(attributesStr.split(",\\s*")));
+      attributes.remove(""); // Clear any empty strings.
+    }
+    return attributes;
   }
 
   public static boolean isRetainedWithField(VariableElement varElement) {
     return hasAnnotation(varElement, RetainedWith.class);
-  }
-
-  public static boolean isLocal(TypeElement type) {
-    NestingKind nestingKind = type.getNestingKind();
-    return nestingKind == NestingKind.ANONYMOUS || nestingKind == NestingKind.LOCAL;
   }
 
   public static <T extends Element> Iterable<T> filterEnclosedElements(
@@ -344,6 +442,12 @@ public final class ElementUtil {
     return Lists.newArrayList(filterEnclosedElements(e, VariableElement.class, ElementKind.FIELD));
   }
 
+  public static Iterable<TypeElement> getDeclaredTypes(TypeElement e) {
+    return filterEnclosedElements(
+        e, TypeElement.class, ElementKind.ANNOTATION_TYPE, ElementKind.ENUM, ElementKind.CLASS,
+        ElementKind.INTERFACE);
+  }
+
   private static boolean paramsMatch(ExecutableElement method, String[] paramTypes) {
     List<? extends VariableElement> params = method.getParameters();
     int size = params.size();
@@ -364,6 +468,12 @@ public final class ElementUtil {
         method -> getName(method).equals(name) && paramsMatch(method, paramTypes)), null);
   }
 
+  public static VariableElement findField(TypeElement type, String name) {
+    return Iterables.getFirst(Iterables.filter(
+        filterEnclosedElements(type, VariableElement.class, ElementKind.FIELD),
+        field -> getName(field).equals(name)), null);
+  }
+
   public static Iterable<TypeMirror> asTypes(Iterable<? extends Element> elements) {
     return Iterables.transform(elements, elem -> elem.asType());
   }
@@ -373,71 +483,35 @@ public final class ElementUtil {
     return javacElements.overrides(overrider, overridden, type);
   }
 
-  public PackageElement getPackage(Element e) {
-    return javacElements.getPackageOf(e);
+  public static PackageElement getPackage(Element e) {
+    while (e != null && !isPackage(e)) {
+      e = e.getEnclosingElement();
+    }
+    return (PackageElement) e;
   }
 
   public String getBinaryName(TypeElement e) {
+    if (e instanceof GeneratedTypeElement) {
+      TypeElement declaringClass = getDeclaringClass(e);
+      if (declaringClass != null) {
+        return getBinaryName(declaringClass) + '$' + getName(e);
+      } else {
+        return getQualifiedName(e);
+      }
+    }
     return javacElements.getBinaryName(e).toString();
+  }
+
+  Map<? extends ExecutableElement, ? extends AnnotationValue>
+      getElementValuesWithDefaults(AnnotationMirror a) {
+    return javacElements.getElementValuesWithDefaults(a);
   }
 
   public static Set<Modifier> getVisibilityModifiers(Element e) {
     return Sets.intersection(e.getModifiers(), VISIBILITY_MODIFIERS);
   }
 
-  public static Set<Modifier> toModifierSet(int modifiers) {
-    Set<Modifier> set = modifierSets.get(modifiers);
-    if (set == null) {
-      set = EnumSet.noneOf(Modifier.class);
-      if ((modifiers & java.lang.reflect.Modifier.PUBLIC) > 0) {
-        set.add(Modifier.PUBLIC);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.PRIVATE) > 0) {
-        set.add(Modifier.PRIVATE);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.PROTECTED) > 0) {
-        set.add(Modifier.PROTECTED);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.STATIC) > 0) {
-        set.add(Modifier.STATIC);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.FINAL) > 0) {
-        set.add(Modifier.FINAL);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.SYNCHRONIZED) > 0) {
-        set.add(Modifier.SYNCHRONIZED);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.VOLATILE) > 0) {
-        set.add(Modifier.VOLATILE);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.TRANSIENT) > 0) {
-        set.add(Modifier.TRANSIENT);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.NATIVE) > 0) {
-        set.add(Modifier.NATIVE);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.ABSTRACT) > 0) {
-        set.add(Modifier.ABSTRACT);
-      }
-      if ((modifiers & java.lang.reflect.Modifier.STRICT) > 0) {
-        set.add(Modifier.STRICTFP);
-      }
-      // Indirectly check whether Modifier.DEFAULT exists, since it was
-      // added in Java 8.
-      if ((modifiers & org.eclipse.jdt.core.dom.Modifier.DEFAULT) > 0) {
-        try {
-          Modifier m = Modifier.valueOf("DEFAULT");
-          set.add(m);
-        } catch (IllegalArgumentException e) {
-          // Can only add DEFAULT modifier in Java 8.
-        }
-      }
-
-      modifierSets.put(modifiers, set);
-    }
-    return set;
-  }
-
+  // This conversion is lossy because there is no bit for "default" the JVM spec.
   public static int fromModifierSet(Set<Modifier> set) {
     int modifiers = 0;
     if (set.contains(Modifier.PUBLIC)) {
@@ -473,16 +547,6 @@ public final class ElementUtil {
     if (set.contains(Modifier.STRICTFP)) {
       modifiers |= java.lang.reflect.Modifier.STRICT;
     }
-    // Indirectly check whether Modifier.DEFAULT exists, since it was
-    // added in Java 8.
-    try {
-      Modifier m = Modifier.valueOf("DEFAULT");
-      if (set.contains(m)) {
-        modifiers |= org.eclipse.jdt.core.dom.Modifier.DEFAULT;
-      }
-    } catch (IllegalArgumentException e) {
-      // Can only add DEFAULT modifier in Java 8.
-    }
     return modifiers;
   }
 
@@ -508,17 +572,60 @@ public final class ElementUtil {
   }
 
   public static AnnotationMirror getAnnotation(Element element, Class<?> annotationClass) {
+    return getQualifiedNamedAnnotation(element, annotationClass.getName());
+  }
+
+  public static boolean hasAnnotation(Element element, Class<?> annotationClass) {
+    return getAnnotation(element, annotationClass) != null;
+  }
+
+  /**
+   * Less strict version of the above where we don't care about the annotation's package.
+   */
+  public static boolean hasNamedAnnotation(AnnotatedConstruct ac, String name) {
+    for (AnnotationMirror annotation : ac.getAnnotationMirrors()) {
+      if (getName(annotation.getAnnotationType().asElement()).equals(name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public static boolean hasQualifiedNamedAnnotation(Element element, String name) {
+    return getQualifiedNamedAnnotation(element, name) != null;
+  }
+
+  public static AnnotationMirror getQualifiedNamedAnnotation(Element element, String name) {
     for (AnnotationMirror annotation : element.getAnnotationMirrors()) {
-      String className = TypeUtil.getQualifiedName(annotation.getAnnotationType());
-      if (className.equals(annotationClass.getName())) {
+      if (getQualifiedName((TypeElement) annotation.getAnnotationType().asElement()).equals(name)) {
         return annotation;
       }
     }
     return null;
   }
 
-  public static boolean hasAnnotation(Element element, Class<?> annotationClass) {
-    return getAnnotation(element, annotationClass) != null;
+  /**
+   * Return true if a binding has a named "Nullable" annotation. Package names aren't
+   * checked because different nullable annotations are defined by several different
+   * Java frameworks.
+   */
+  public static boolean hasNullableAnnotation(Element element) {
+    return hasNamedAnnotation(element, "Nullable");
+  }
+
+  /**
+   * Return true if a binding has a named "Nonnull" annotation. Package names aren't
+   * checked because different nonnull annotations are defined in several Java
+   * frameworks, with varying but similar names.
+   */
+  public static boolean hasNonnullAnnotation(Element element) {
+    Pattern p = Pattern.compile("No[nt][Nn]ull");
+    for (AnnotationMirror annotation : element.getAnnotationMirrors()) {
+      if (p.matcher(annotation.getAnnotationType().asElement().getSimpleName()).matches()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public static Object getAnnotationValue(AnnotationMirror annotation, String name) {
@@ -541,5 +648,82 @@ public final class ElementUtil {
     List<ExecutableElement> members = Lists.newArrayList(getMethods(annotation));
     Collections.sort(members, (m1, m2) -> getName(m1).compareTo(getName(m2)));
     return members;
+  }
+
+  public boolean areParametersNonnullByDefault(TypeElement typeElement, Options options) {
+    if (ElementUtil.hasAnnotation(typeElement, ParametersAreNonnullByDefault.class)) {
+      return true;
+    }
+    PackageElement pkg = getPackage(typeElement);
+    String pkgName = pkg.getQualifiedName().toString();
+    return options.getPackageInfoLookup().hasParametersAreNonnullByDefault(pkgName);
+  }
+
+  /**
+   * Returns true if there's a SuppressedWarning annotation with the specified warning.
+   * The SuppressWarnings annotation can be inherited from the owning method or class,
+   * but does not have package scope.
+   */
+  @SuppressWarnings("unchecked")
+  public static boolean suppressesWarning(String warning, Element element) {
+    if (element == null || isPackage(element)) {
+      return false;
+    }
+    AnnotationMirror annotation = getAnnotation(element, SuppressWarnings.class);
+    if (annotation != null) {
+      for (AnnotationValue elem
+           : (List<? extends AnnotationValue>) getAnnotationValue(annotation, "value")) {
+        if (warning.equals(elem.getValue())) {
+          return true;
+        }
+      }
+    }
+    return suppressesWarning(warning, element.getEnclosingElement());
+  }
+
+  /**
+   * Maps an Element to a TypeMirror. element.asType() is the preferred mapping,
+   * but sometimes type information is lost. For example, an anonymous class with
+   * a type use annotation has the annotation in the node's type, but not in the
+   * node's element.asType().
+   */
+  public void mapElementType(Element element, TypeMirror type) {
+    elementTypeMap.put(element, type);
+  }
+
+  /**
+   * Returns the associated type mirror for an element.
+   */
+  public TypeMirror getType(Element element) {
+    return elementTypeMap.containsKey(element) ? elementTypeMap.get(element) : element.asType();
+  }
+
+  /**
+   * Returns whether an element is marked as always being non-null. Field, method,
+   * and parameter elements can be defined as non-null with a Nonnull annotation.
+   * Method parameters can also be defined as non-null by annotating the owning
+   * package or type element with the ParametersNonnullByDefault annotation.
+   */
+  public static boolean isNonnull(Element element, boolean parametersNonnullByDefault) {
+    return hasNonnullAnnotation(element)
+        || isConstructor(element)  // Java constructors are always non-null.
+        || (isParameter(element)
+            && parametersNonnullByDefault
+            && !((VariableElement) element).asType().getKind().isPrimitive());
+  }
+
+  /**
+   * Returns the source file name for a type element. Returns null if the element
+   * isn't a javac ClassSymbol, or if it is defined by a classfile which was compiled
+   * without a source attribute.
+   */
+  public static String getSourceFile(TypeElement type) {
+    if (type instanceof ClassSymbol) {
+      JavaFileObject srcFile = ((ClassSymbol) type).sourcefile;
+      if (srcFile != null) {
+        return srcFile.getName();
+      }
+    }
+    return null;
   }
 }

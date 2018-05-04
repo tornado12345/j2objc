@@ -25,11 +25,12 @@ import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.ast.TypeDeclaration;
 import com.google.devtools.j2objc.types.GeneratedExecutableElement;
 import com.google.devtools.j2objc.types.GeneratedTypeElement;
-import com.google.devtools.j2objc.types.Types;
 import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.TranslationUtil;
+import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.j2objc.annotations.ObjectiveCName;
+import java.util.List;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
@@ -41,7 +42,8 @@ import javax.lang.model.element.TypeElement;
 public class PackageInfoRewriter {
 
   private final CompilationUnit unit;
-  private final Types typeEnv;
+  private final TypeUtil typeUtil;
+  private final TranslationUtil translationUtil;
 
   public static void run(CompilationUnit unit) {
     if (unit.getMainTypeName().endsWith(NameTable.PACKAGE_INFO_CLASS_NAME)) {
@@ -51,20 +53,26 @@ public class PackageInfoRewriter {
 
   private PackageInfoRewriter(CompilationUnit unit) {
     this.unit = unit;
-    typeEnv = unit.getEnv().types();
+    typeUtil = unit.getEnv().typeUtil();
+    translationUtil = unit.getEnv().translationUtil();
   }
 
   private void run() {
     PackageDeclaration pkg = unit.getPackage();
-
+    List<Annotation> annotations = pkg.getAnnotations();
+    List<Annotation> runtimeAnnotations = TreeUtil.getRuntimeAnnotationsList(annotations);
     String prefix = getPackagePrefix(pkg);
-    if ((TreeUtil.getRuntimeAnnotationsList(pkg.getAnnotations()).isEmpty() && prefix == null)
-        || !TranslationUtil.needsReflection(pkg)) {
+    boolean needsReflection = translationUtil.needsReflection(pkg);
+
+    // Remove compile time annotations.
+    annotations.retainAll(runtimeAnnotations);
+
+    if ((annotations.isEmpty() && prefix == null) || !needsReflection) {
       return;
     }
 
     TypeElement typeElement =
-        GeneratedTypeElement.newPackageInfoClass(pkg.getPackageElement(), typeEnv);
+        GeneratedTypeElement.newPackageInfoClass(pkg.getPackageElement(), typeUtil);
     TypeDeclaration typeDecl = new TypeDeclaration(typeElement);
     TreeUtil.moveList(pkg.getAnnotations(), typeDecl.getAnnotations());
 
@@ -85,13 +93,13 @@ public class PackageInfoRewriter {
 
   private MethodDeclaration createPrefixMethod(String prefix, TypeElement type) {
     ExecutableElement element = GeneratedExecutableElement.newMethodWithSelector(
-        "__prefix", typeEnv.resolveJavaTypeMirror("java.lang.String"), type)
+        "__prefix", typeUtil.getJavaString().asType(), type)
         .addModifiers(Modifier.STATIC);
     MethodDeclaration method = new MethodDeclaration(element);
     method.setHasDeclaration(false);
     Block body = new Block();
     method.setBody(body);
-    body.addStatement(new ReturnStatement(new StringLiteral(prefix, typeEnv)));
+    body.addStatement(new ReturnStatement(new StringLiteral(prefix, typeUtil)));
     return method;
   }
 }

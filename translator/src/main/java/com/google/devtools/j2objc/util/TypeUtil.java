@@ -15,25 +15,37 @@
 package com.google.devtools.j2objc.util;
 
 import com.google.common.base.Joiner;
-import com.google.devtools.j2objc.jdt.BindingConverter;
-import com.google.devtools.j2objc.jdt.JdtIntersectionType;
+import com.google.common.collect.ImmutableMap;
+import com.google.devtools.j2objc.types.AbstractTypeMirror;
 import com.google.devtools.j2objc.types.ExecutablePair;
+import com.google.devtools.j2objc.types.GeneratedArrayType;
+import com.google.devtools.j2objc.types.GeneratedTypeElement;
+import com.google.devtools.j2objc.types.NativeType;
+import com.google.devtools.j2objc.types.PointerType;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
-import javax.lang.model.element.Element;
+import java.util.Map;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
-import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.IntersectionType;
 import javax.lang.model.type.NoType;
+import javax.lang.model.type.NullType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVariable;
+import javax.lang.model.type.WildcardType;
+import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 
 /**
@@ -43,22 +55,104 @@ import javax.lang.model.util.Types;
  */
 public final class TypeUtil {
 
+  public static final TypeMirror ID_TYPE = new NativeType("id");
+  public static final TypeMirror ID_PTR_TYPE = new PointerType(ID_TYPE);
+  public static final TypeElement NS_OBJECT =
+      GeneratedTypeElement.newIosClass("NSObject", null, "");
+  public static final TypeElement NS_STRING =
+      GeneratedTypeElement.newIosClass("NSString", NS_OBJECT, "");
+  public static final TypeElement NS_EXCEPTION =
+      GeneratedTypeElement.newIosClass("NSException", NS_OBJECT, "");
+  public static final TypeElement NS_NUMBER =
+      GeneratedTypeElement.newIosClass("NSNumber", NS_OBJECT, "");
+  public static final TypeElement IOS_CLASS =
+      GeneratedTypeElement.newIosClass("IOSClass", NS_OBJECT, "IOSClass.h");
+  public static final TypeElement NS_COPYING =
+      GeneratedTypeElement.newIosInterface("NSCopying", "");
+  public static final TypeElement NS_FASTENUMERATION =
+      GeneratedTypeElement.newIosInterface("NSFastEnumeration", "");
+  public static final TypeElement IOS_OBJECT_ARRAY =
+      GeneratedTypeElement.newIosClass("IOSObjectArray", NS_OBJECT, "IOSObjectArray.h");
+  public static final TypeMirror NATIVE_CHAR_PTR = new NativeType("char *");
+  private static final Map<TypeKind, TypeElement> PRIMITIVE_IOS_ARRAYS;
+
+  static {
+    Map<TypeKind, TypeElement> map = new EnumMap<>(TypeKind.class);
+    map.put(TypeKind.BOOLEAN, newPrimitiveIosArray("IOSBooleanArray"));
+    map.put(TypeKind.BYTE, newPrimitiveIosArray("IOSByteArray"));
+    map.put(TypeKind.CHAR, newPrimitiveIosArray("IOSCharArray"));
+    map.put(TypeKind.DOUBLE, newPrimitiveIosArray("IOSDoubleArray"));
+    map.put(TypeKind.FLOAT, newPrimitiveIosArray("IOSFloatArray"));
+    map.put(TypeKind.INT, newPrimitiveIosArray("IOSIntArray"));
+    map.put(TypeKind.LONG, newPrimitiveIosArray("IOSLongArray"));
+    map.put(TypeKind.SHORT, newPrimitiveIosArray("IOSShortArray"));
+    PRIMITIVE_IOS_ARRAYS = map;
+  }
+
+  private final Elements javacElements;
   private final Types javacTypes;
   private final ElementUtil elementUtil;
 
+  // Commonly accessed types.
+  private final TypeElement javaObject;
+  private final TypeElement javaString;
+  private final TypeElement javaClass;
+  private final TypeElement javaNumber;
+  private final TypeElement javaThrowable;
+
+  private final Map<TypeElement, TypeElement> javaToObjcTypeMap;
+
   private static final Joiner INNER_CLASS_JOINER = Joiner.on('$');
 
-  public TypeUtil(Types javacTypes, ElementUtil elementUtil) {
-    this.javacTypes = javacTypes;
+  public TypeUtil(ParserEnvironment env, ElementUtil elementUtil) {
+    this.javacElements = env.elementUtilities();
+    this.javacTypes = env.typeUtilities();
     this.elementUtil = elementUtil;
+
+    javaObject = javacElements.getTypeElement("java.lang.Object");
+    javaString = javacElements.getTypeElement("java.lang.String");
+    javaClass = javacElements.getTypeElement("java.lang.Class");
+    javaNumber = javacElements.getTypeElement("java.lang.Number");
+    javaThrowable = javacElements.getTypeElement("java.lang.Throwable");
+    TypeElement javaCloneable = javacElements.getTypeElement("java.lang.Cloneable");
+
+    ImmutableMap.Builder<TypeElement, TypeElement> typeMapBuilder =
+        ImmutableMap.<TypeElement, TypeElement>builder()
+        .put(javaObject, NS_OBJECT)
+        .put(javaString, NS_STRING)
+        .put(javaClass, IOS_CLASS)
+        .put(javaNumber, NS_NUMBER)
+        .put(javaCloneable, NS_COPYING);
+
+    TypeElement typeNSException = javacElements.getTypeElement("com.google.j2objc.NSException");
+    TypeElement typeNSFastEnumeration =
+        javacElements.getTypeElement("com.google.j2objc.NSFastEnumeration");
+
+    // Types could be null if the user is not using jre_emul.jar as the boot path.
+    if (typeNSException != null) {
+      typeMapBuilder.put(typeNSException, NS_EXCEPTION);
+    }
+    if (typeNSFastEnumeration != null) {
+      typeMapBuilder.put(typeNSFastEnumeration, NS_FASTENUMERATION);
+    }
+
+    javaToObjcTypeMap = typeMapBuilder.build();
   }
 
   public ElementUtil elementUtil() {
     return elementUtil;
   }
 
+  public TypeElement resolveJavaType(String qualifiedName) {
+    return javacElements.getTypeElement(qualifiedName);
+  }
+
+  public static boolean isDeclaredType(TypeMirror t) {
+    return t.getKind() == TypeKind.DECLARED;
+  }
+
   public static ElementKind getDeclaredTypeKind(TypeMirror t) {
-    return t.getKind() == TypeKind.DECLARED ? ((DeclaredType) t).asElement().getKind() : null;
+    return isDeclaredType(t) ? ((DeclaredType) t).asElement().getKind() : null;
   }
 
   public static boolean isClass(TypeMirror t) {
@@ -79,8 +173,16 @@ public final class TypeUtil {
     return getDeclaredTypeKind(t) == ElementKind.ANNOTATION_TYPE;
   }
 
+  public static boolean isBoolean(TypeMirror t) {
+    return t.getKind() == TypeKind.BOOLEAN;
+  }
+
   public static boolean isVoid(TypeMirror t) {
     return t.getKind() == TypeKind.VOID;
+  }
+
+  public static boolean isPrimitiveOrVoid(TypeMirror t) {
+    return isVoid(t) || t.getKind().isPrimitive();
   }
 
   public static boolean isNone(TypeMirror t) {
@@ -92,26 +194,30 @@ public final class TypeUtil {
     return t.getKind() == TypeKind.ARRAY;
   }
 
-  // Ugly, but we can't have it actually implement IntersectionType or return TypeKind.INTERSECTION
-  // until Java 8.
+  public static boolean isFloatingPoint(TypeMirror t) {
+    TypeKind kind = t.getKind();
+    return kind == TypeKind.FLOAT || kind == TypeKind.DOUBLE;
+  }
+
   public static boolean isIntersection(TypeMirror t) {
-    return t instanceof JdtIntersectionType;
+    return t.getKind() == TypeKind.INTERSECTION;
+  }
+
+  public static boolean isTypeVariable(TypeMirror t) {
+    return t.getKind() == TypeKind.TYPEVAR;
   }
 
   public static TypeElement asTypeElement(TypeMirror t) {
-    if (t.getKind() != TypeKind.DECLARED) {
-      return null;
-    }
-    Element e = ((DeclaredType) t).asElement();
-    switch (e.getKind()) {
-      case ANNOTATION_TYPE:
-      case CLASS:
-      case ENUM:
-      case INTERFACE:
-        return (TypeElement) e;
-      default:
-        return null;
-    }
+    return isDeclaredType(t) ? (TypeElement) ((DeclaredType) t).asElement() : null;
+  }
+
+  public static boolean isJavaObject(TypeMirror t) {
+    TypeElement typeElement = asTypeElement(t);
+    return typeElement != null && !isInterface(t) && isNone(typeElement.getSuperclass());
+  }
+
+  public static TypeParameterElement asTypeParameterElement(TypeMirror t) {
+    return isTypeVariable(t) ? (TypeParameterElement) ((TypeVariable) t).asElement() : null;
   }
 
   public DeclaredType getSuperclass(TypeMirror t) {
@@ -131,18 +237,17 @@ public final class TypeUtil {
     TypeMirror t = arrayType;
     while (t.getKind().equals(TypeKind.ARRAY)) {
       dimCount++;
-      t = (((ArrayType) t).getComponentType());
+      t = ((ArrayType) t).getComponentType();
     }
     return dimCount;
   }
 
-  public static int getModifiers(TypeMirror t) {
-    // the public modifier api doesn't expose synthetic
-    return BindingConverter.unwrapTypeMirrorIntoTypeBinding(t).getModifiers();
-  }
-
   public ExecutableType asMemberOf(DeclaredType containing, ExecutableElement method) {
     return (ExecutableType) javacTypes.asMemberOf(containing, method);
+  }
+
+  public TypeMirror asMemberOf(DeclaredType containing, VariableElement var) {
+    return javacTypes.asMemberOf(containing, var);
   }
 
   public boolean isAssignable(TypeMirror t1, TypeMirror t2) {
@@ -154,11 +259,91 @@ public final class TypeUtil {
   }
 
   public boolean isSubsignature(ExecutableType m1, ExecutableType m2) {
+    if (isGeneratedType(m1) || isGeneratedType(m2)) {
+      return m1.equals(m2);
+    }
     return javacTypes.isSubsignature(m1, m2);
   }
 
+  /**
+   * If type is a byte TypeMirror, short TypeMirror, or char TypeMirror, an int TypeMirror is
+   * returned. Otherwise, type is returned. See jls-5.6.1.
+   * @param type a numeric type
+   * @return the result of unary numeric promotion applied to type
+   */
+  public TypeMirror unaryNumericPromotion(TypeMirror type) {
+    TypeKind t = type.getKind();
+    if (t == TypeKind.DECLARED) {
+      type = javacTypes.unboxedType(type);
+      t = type.getKind();
+    }
+    if (t == TypeKind.BYTE || t == TypeKind.SHORT || t == TypeKind.CHAR) {
+      return getInt();
+    } else {
+      return type;
+    }
+  }
+
+  /**
+   * If either type is a double TypeMirror, a double TypeMirror is returned.
+   * Otherwise, if either type is a float TypeMirror, a float TypeMirror is returned.
+   * Otherwise, if either type is a long TypeMirror, a long TypeMirror is returned.
+   * Otherwise, an int TypeMirror is returned. See jls-5.6.2.
+   * @param type1 a numeric type
+   * @param type2 a numeric type
+   * @return the result of binary numeric promotion applied to type1 and type2
+   */
+  public TypeMirror binaryNumericPromotion(TypeMirror type1, TypeMirror type2) {
+    TypeKind t1 = type1.getKind();
+    TypeKind t2 = type2.getKind();
+    if (t1 == TypeKind.DECLARED) {
+      t1 = javacTypes.unboxedType(type1).getKind();
+    }
+    if (t2 == TypeKind.DECLARED) {
+      t2 = javacTypes.unboxedType(type2).getKind();
+    }
+    if (t1 == TypeKind.DOUBLE || t2 == TypeKind.DOUBLE) {
+      return getDouble();
+    } else if (t1 == TypeKind.FLOAT || t2 == TypeKind.FLOAT) {
+      return getFloat();
+    } else if (t1 == TypeKind.LONG || t2 == TypeKind.LONG) {
+      return getLong();
+    } else {
+      return getInt();
+    }
+  }
+
+  /**
+   * TODO(user): See jls-5.6.2 and jls-15.25.
+   * @param trueType the type of the true expression
+   * @param falseType the type of the false expression
+   * @return the inferred type of the conditional expression
+   */
+  public TypeMirror inferConditionalExpressionType(TypeMirror trueType, TypeMirror falseType) {
+    return isAssignable(trueType, falseType) ? falseType : trueType;
+  }
+
   public List<? extends TypeMirror> directSupertypes(TypeMirror t) {
-    return javacTypes.directSupertypes(t);
+    if (isGeneratedType(t)) {
+      if (t instanceof GeneratedTypeElement.Mirror) {
+        GeneratedTypeElement element = (GeneratedTypeElement)
+            ((GeneratedTypeElement.Mirror) t).asElement();
+        return element.getDirectSupertypes();
+      } else {
+        return Collections.emptyList();
+      }
+    }
+    if (isArray(t)) {
+      // javac's directSupertypes() for String[] is Object[], whereas
+      // JDT's returns an empty list. Currently typed arrays aren't necessary,
+      // so prefer the JDT behavior here.
+      return Collections.emptyList();
+    }
+    List<? extends TypeMirror> result = new ArrayList<>(javacTypes.directSupertypes(t));
+    if (TypeUtil.isInterface(t)) {
+      result.remove(javaObject.asType());
+    }
+    return result;
   }
 
   public TypeMirror erasure(TypeMirror t) {
@@ -166,7 +351,85 @@ public final class TypeUtil {
   }
 
   public ArrayType getArrayType(TypeMirror componentType) {
+    if (isGeneratedType(componentType)) {
+      return new GeneratedArrayType(componentType);
+    }
     return javacTypes.getArrayType(componentType);
+  }
+
+  public ArrayType getArrayType(TypeMirror componentType, int dims) {
+    if (dims < 1) {
+      throw new IllegalArgumentException("dims must be greater than or equal to 1");
+    }
+    if (dims == 1) {
+      return getArrayType(componentType);
+    } else {
+      return getArrayType(getArrayType(componentType), dims - 1);
+    }
+  }
+
+  boolean isGeneratedType(TypeMirror type) {
+    return type instanceof AbstractTypeMirror;
+  }
+
+  public TypeElement getIosArray(TypeMirror componentType) {
+    return componentType.getKind().isPrimitive()
+        ? PRIMITIVE_IOS_ARRAYS.get(componentType.getKind()) : IOS_OBJECT_ARRAY;
+  }
+
+  public TypeElement getJavaObject() {
+    return javaObject;
+  }
+
+  public TypeElement getJavaString() {
+    return javaString;
+  }
+
+  public TypeElement getJavaClass() {
+    return javaClass;
+  }
+
+  public TypeElement getJavaNumber() {
+    return javaNumber;
+  }
+
+  public TypeElement getJavaThrowable() {
+    return javaThrowable;
+  }
+
+  public boolean isString(TypeElement e) {
+    return javaString.equals(e) || NS_STRING.equals(e);
+  }
+
+  public boolean isString(TypeMirror t) {
+    return isString(asTypeElement(t));
+  }
+
+  public boolean isClassType(TypeElement e) {
+    return javaClass.equals(e) || IOS_CLASS.equals(e);
+  }
+
+  public boolean isClassType(TypeMirror t) {
+    return isClassType(asTypeElement(t));
+  }
+
+  /**
+   * Maps the given type to it's Objective-C equivalent. Array types are mapped to their equivalent
+   * IOSArray type and common Java classes like String and Object are mapped to NSString and
+   * NSObject.
+   */
+  public TypeElement getObjcClass(TypeMirror t) {
+    if (isArray(t)) {
+      return getIosArray(((ArrayType) t).getComponentType());
+    } else if (isDeclaredType(t)) {
+      return getObjcClass((TypeElement) ((DeclaredType) t).asElement());
+    }
+    return null;
+  }
+
+  public TypeElement getObjcClass(TypeElement element) {
+    TypeElement mapped = javaToObjcTypeMap.get(element);
+    return mapped != null ? mapped : element;
   }
 
   /**
@@ -267,6 +530,8 @@ public final class TypeUtil {
 
   public static boolean isReferenceType(TypeMirror t) {
     switch (t.getKind()) {
+      case OTHER:
+        return isId(t);
       case ARRAY:
       case DECLARED:
       case ERROR:
@@ -281,15 +546,58 @@ public final class TypeUtil {
     }
   }
 
+  public static boolean isId(TypeMirror t) {
+    return t instanceof NativeType && ((NativeType) t).getName().equals("id");
+  }
+
   public PrimitiveType getPrimitiveType(TypeKind kind) {
     return javacTypes.getPrimitiveType(kind);
   }
 
-  public NoType getVoidType() {
+  public PrimitiveType getBoolean() {
+    return getPrimitiveType(TypeKind.BOOLEAN);
+  }
+
+  public PrimitiveType getByte() {
+    return getPrimitiveType(TypeKind.BYTE);
+  }
+
+  public PrimitiveType getChar() {
+    return getPrimitiveType(TypeKind.CHAR);
+  }
+
+  public PrimitiveType getDouble() {
+    return getPrimitiveType(TypeKind.DOUBLE);
+  }
+
+  public PrimitiveType getFloat() {
+    return getPrimitiveType(TypeKind.FLOAT);
+  }
+
+  public PrimitiveType getInt() {
+    return getPrimitiveType(TypeKind.INT);
+  }
+
+  public PrimitiveType getLong() {
+    return getPrimitiveType(TypeKind.LONG);
+  }
+
+  public PrimitiveType getShort() {
+    return getPrimitiveType(TypeKind.SHORT);
+  }
+
+  public NoType getVoid() {
     return javacTypes.getNoType(TypeKind.VOID);
   }
 
+  public NullType getNull() {
+    return javacTypes.getNullType();
+  }
+
   public PrimitiveType unboxedType(TypeMirror t) {
+    if (isGeneratedType(t)) {
+      return null;
+    }
     try {
       return javacTypes.unboxedType(t);
     } catch (IllegalArgumentException e) {
@@ -305,12 +613,85 @@ public final class TypeUtil {
     return javacTypes.boxedClass(t);
   }
 
+  public boolean isDeclaredAsId(TypeMirror t) {
+    return isReferenceType(t) && getObjcUpperBounds(t).isEmpty();
+  }
+
+  public boolean isObjcAssignable(TypeMirror t1, TypeMirror t2) {
+    if (!isReferenceType(t1) || !isReferenceType(t2)) {
+      if (t1 instanceof PointerType && t2 instanceof PointerType) {
+        return isObjcAssignable(((PointerType) t1).getPointeeType(),
+                                ((PointerType) t2).getPointeeType());
+      }
+      return t1.equals(t2);
+    }
+    outer: for (TypeElement t2Class : getObjcUpperBounds(t2)) {
+      for (TypeElement t1Class : getObjcUpperBounds(t1)) {
+        if (isObjcSubtype(t1Class, t2Class)) {
+          continue outer;
+        }
+      }
+      return false;
+    }
+    return true;
+  }
+
+  public boolean isObjcSubtype(TypeElement type, TypeElement targetSupertype) {
+    if (type == null) {
+      return false;
+    }
+    if (type.equals(targetSupertype)) {
+      return true;
+    }
+    TypeMirror superclass = type.getSuperclass();
+    if (superclass != null && isObjcSubtype(getObjcClass(superclass), targetSupertype)) {
+      return true;
+    }
+    for (TypeMirror intrface : type.getInterfaces()) {
+      if (isObjcSubtype(getObjcClass(intrface), targetSupertype)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public List<TypeElement> getObjcUpperBounds(TypeMirror t) {
+    List<TypeElement> result = new ArrayList<>();
+    for (TypeMirror bound : getUpperBounds(t)) {
+      TypeElement elem = getObjcClass(bound);
+      // NSObject is emmitted as "id".
+      if (elem != null && !elem.equals(NS_OBJECT)) {
+        result.add(elem);
+      }
+    }
+    return result;
+  }
+
+  public List<? extends TypeMirror> getUpperBounds(TypeMirror t) {
+    if (t == null) {
+      return Collections.singletonList(
+          javacElements.getTypeElement("java.lang.Object").asType());
+    }
+    switch (t.getKind()) {
+      case INTERSECTION:
+        return ((IntersectionType) t).getBounds();
+      case TYPEVAR:
+        return getUpperBounds(((TypeVariable) t).getUpperBound());
+      case WILDCARD:
+        return getUpperBounds(((WildcardType) t).getExtendsBound());
+      default:
+        return Collections.singletonList(t);
+    }
+  }
+
   public static String getName(TypeMirror t) {
     switch (t.getKind()) {
       case ARRAY:
         return getName(((ArrayType) t).getComponentType()) + "[]";
       case DECLARED:
         return ElementUtil.getName(asTypeElement(t));
+      case TYPEVAR:
+        return ElementUtil.getName(((TypeVariable) t).asElement());
       case BOOLEAN:
         return "boolean";
       case BYTE:
@@ -363,26 +744,57 @@ public final class TypeUtil {
       case DECLARED:
         return "L" + elementUtil.getBinaryName(asTypeElement(t)).replace('.', '/') + ";";
       case BOOLEAN:
-        return "Z";
       case BYTE:
-        return "B";
       case CHAR:
-        return "C";
       case DOUBLE:
-        return "D";
       case FLOAT:
-        return "F";
       case INT:
-        return "I";
       case LONG:
-        return "J";
       case SHORT:
-        return "S";
       case VOID:
-        return "V";
+        return getBinaryName(t);
+      default:
+        throw new AssertionError("Cannot resolve signature name for type: " + t);
+    }
+  }
+
+  /**
+   * Returns the binary name for a primitive or void type.
+   */
+  public static String getBinaryName(TypeMirror t) {
+    switch (t.getKind()) {
+      case BOOLEAN: return "Z";
+      case BYTE: return "B";
+      case CHAR: return "C";
+      case DOUBLE: return "D";
+      case FLOAT: return "F";
+      case INT: return "I";
+      case LONG: return "J";
+      case SHORT: return "S";
+      case VOID: return "V";
       default:
         throw new AssertionError("Cannot resolve binary name for type: " + t);
     }
+  }
+
+  /**
+   * Returns the descriptor of a constructor or method (JLS 4.3.3).
+   */
+  public String getMethodDescriptor(ExecutableType method) {
+    StringBuilder sb = new StringBuilder("(");
+    for (TypeMirror t : method.getParameterTypes()) {
+      sb.append(getSignatureName(t));
+    }
+    sb.append(")");
+    sb.append(getSignatureName(method.getReturnType()));
+    return sb.toString();
+  }
+
+  /**
+   * Returns the descriptor for a field (JLS 4.3.2).
+   */
+  public String getFieldDescriptor(TypeMirror type) {
+    return getSignatureName(type);
   }
 
   /**
@@ -393,8 +805,7 @@ public final class TypeUtil {
    * from the outermost class declaration to the inner class declaration.
    */
   public String getReferenceName(ExecutableElement element) {
-    if (!ElementUtil.isConstructor(element)
-        || ElementUtil.getDeclaringClass(element).getNestingKind() != NestingKind.MEMBER) {
+    if (!ElementUtil.isConstructor(element)) {
       return ElementUtil.getName(element);
     }
     TypeElement parent = ElementUtil.getDeclaringClass(element);
@@ -405,6 +816,25 @@ public final class TypeUtil {
       parent = ElementUtil.getDeclaringClass(parent);
     } while (parent != null);
     return INNER_CLASS_JOINER.join(components);
+  }
+
+
+  /**
+   * Returns a format specifier that is supported by the NSString, CFString and NSLog formatting
+   * methods.
+   */
+  public static String getObjcFormatSpecifier(TypeMirror t) {
+    switch (t.getKind()) {
+      case BOOLEAN:
+      case BYTE:
+      case INT: return "d";
+      case CHAR: return "c";
+      case DOUBLE: return "lf";
+      case FLOAT: return "f";
+      case LONG: return "lld";
+      case SHORT: return "hd";
+      default: return "@";
+    }
   }
 
   /**
@@ -432,5 +862,9 @@ public final class TypeUtil {
       sb.append(getSignatureName(returnType));
     }
     return sb.toString();
+  }
+
+  private static TypeElement newPrimitiveIosArray(String name) {
+    return GeneratedTypeElement.newIosClass(name, NS_OBJECT, "IOSPrimitiveArray.h");
   }
 }

@@ -53,7 +53,8 @@ const char* kDefaultPackage = "";
 const int kPackagePrefixFieldNumber = 102687446;
 
 
-static map<string, string> prefixes;
+static std::map<string, string> prefixes;
+static std::map<string, string> wildcardPrefixes;
 
 static bool generateFileDirMapping = false;
 
@@ -67,15 +68,15 @@ const char* const kKeywordList[] = {
   "FILE"
 };
 
-set<string> MakeKeywordsMap() {
-  set<string> result;
+std::set<string> MakeKeywordsMap() {
+  std::set<string> result;
   for (int i = 0; i < GOOGLE_ARRAYSIZE(kKeywordList); i++) {
     result.insert(kKeywordList[i]);
   }
   return result;
 }
 
-set<string> kKeywords = MakeKeywordsMap();
+std::set<string> kKeywords = MakeKeywordsMap();
 
 const string& FieldName(const FieldDescriptor* field) {
   // Groups are hacky:  The name of the field is just the lower-cased name
@@ -86,37 +87,6 @@ const string& FieldName(const FieldDescriptor* field) {
   } else {
     return field->name();
   }
-}
-
-string UnderscoresToCamelCaseImpl(const string& input, bool cap_next_letter) {
-  string result;
-  // Note:  I distrust ctype.h due to locales.
-  for (int i = 0; i < input.size(); i++) {
-    if ('a' <= input[i] && input[i] <= 'z') {
-      if (cap_next_letter) {
-        result += input[i] + ('A' - 'a');
-      } else {
-        result += input[i];
-      }
-      cap_next_letter = false;
-    } else if ('A' <= input[i] && input[i] <= 'Z') {
-      if (i == 0 && !cap_next_letter) {
-        // Force first letter to lower-case unless explicitly told to
-        // capitalize it.
-        result += input[i] + ('a' - 'A');
-      } else {
-        // Capital letters after the first are left as-is.
-        result += input[i];
-      }
-      cap_next_letter = false;
-    } else if ('0' <= input[i] && input[i] <= '9') {
-      result += input[i];
-      cap_next_letter = true;
-    } else {
-      cap_next_letter = true;
-    }
-  }
-  return result;
 }
 
 string StripProto(const string& filename) {
@@ -169,11 +139,28 @@ string GetPackagePrefix(const FileDescriptor *file) {
     return package_prefix_field->length_delimited();
   }
 
+  // Look for a matching prefix from the prefixes file.
   string java_package = FileJavaPackage(file);
-  map<string, string>::iterator it = prefixes.find(java_package);
+  std::map<string, string>::iterator it = prefixes.find(java_package);
   if (it != prefixes.end()) {
     return it->second;
   }
+
+  // Look for a matching wildcard prefix.
+  string sub_package = java_package;
+  while (!sub_package.empty()) {
+    it = wildcardPrefixes.find(sub_package);
+    if (it != wildcardPrefixes.end()) {
+      prefixes.insert(std::pair<string, string>(java_package, it->second));
+      return it->second;
+    }
+    size_t lastDot = sub_package.find_last_of(".");
+    if (lastDot == string::npos) {
+      break;
+    }
+    sub_package.erase(lastDot);
+  }
+
   return CapitalizeJavaPackage(java_package);
 }
 
@@ -213,19 +200,50 @@ string SafeName(const string& name) {
   return result;
 }
 
+string UnderscoresToCamelCase(const string& input, bool cap_next_letter) {
+  string result;
+  // Note:  I distrust ctype.h due to locales.
+  for (int i = 0; i < input.size(); i++) {
+    if ('a' <= input[i] && input[i] <= 'z') {
+      if (cap_next_letter) {
+        result += input[i] + ('A' - 'a');
+      } else {
+        result += input[i];
+      }
+      cap_next_letter = false;
+    } else if ('A' <= input[i] && input[i] <= 'Z') {
+      if (i == 0 && !cap_next_letter) {
+        // Force first letter to lower-case unless explicitly told to
+        // capitalize it.
+        result += input[i] + ('a' - 'A');
+      } else {
+        // Capital letters after the first are left as-is.
+        result += input[i];
+      }
+      cap_next_letter = false;
+    } else if ('0' <= input[i] && input[i] <= '9') {
+      result += input[i];
+      cap_next_letter = true;
+    } else {
+      cap_next_letter = true;
+    }
+  }
+  return result;
+}
+
 string UnderscoresToCamelCase(const FieldDescriptor* field) {
-  return UnderscoresToCamelCaseImpl(FieldName(field), false);
+  return UnderscoresToCamelCase(FieldName(field), false);
 }
 
 string UnderscoresToCapitalizedCamelCase(const FieldDescriptor* field) {
-  return UnderscoresToCamelCaseImpl(FieldName(field), true);
+  return UnderscoresToCamelCase(FieldName(field), true);
 }
 
 string FileClassName(const FileDescriptor* file) {
   if (file->options().has_java_outer_classname()) {
     return file->options().java_outer_classname();
   } else {
-    return UnderscoresToCamelCaseImpl(StripProto(FileBaseName(file)), true);
+    return UnderscoresToCamelCase(StripProto(FileBaseName(file)), true);
   }
 }
 
@@ -353,7 +371,7 @@ string GetHeader(const EnumDescriptor *descriptor) {
   }
 }
 
-string JoinFlags(const vector<string> &flags) {
+string JoinFlags(const std::vector<string> &flags) {
   if (flags.size() == 0) {
     return "0";
   }
@@ -368,7 +386,7 @@ string JoinFlags(const vector<string> &flags) {
 }
 
 string GetFieldFlags(const FieldDescriptor *field) {
-  vector<string> flags;
+  std::vector<string> flags;
   if (field->is_required()) {
     flags.push_back("CGPFieldFlagRequired");
   }
@@ -380,6 +398,9 @@ string GetFieldFlags(const FieldDescriptor *field) {
   }
   if (field->options().packed()) {
     flags.push_back("CGPFieldFlagPacked");
+  }
+  if (IsMapField(field)) {
+    flags.push_back("CGPFieldFlagMap");
   }
   return JoinFlags(flags);
 }
@@ -571,23 +592,6 @@ string GetDefaultValueTypeName(const FieldDescriptor *descriptor) {
   }
 }
 
-string GetFieldDataClassName(const FieldDescriptor *descriptor) {
-  switch (GetJavaType(descriptor)) {
-    case JAVATYPE_INT:
-    case JAVATYPE_LONG:
-    case JAVATYPE_FLOAT:
-    case JAVATYPE_DOUBLE:
-    case JAVATYPE_BOOLEAN:
-    case JAVATYPE_STRING:
-    case JAVATYPE_BYTES:
-      return "NULL";
-    case JAVATYPE_ENUM:
-      return "\"" + ClassName(descriptor->enum_type()) + "\"";
-    case JAVATYPE_MESSAGE:
-      return "\"" + ClassName(descriptor->message_type()) + "\"";
-  }
-}
-
 string GetFieldOptionsData(const FieldDescriptor *descriptor) {
   string field_options = descriptor->options().SerializeAsString();
   // Must convert to a standard byte order for packing length into
@@ -604,13 +608,20 @@ string GetFieldOptionsData(const FieldDescriptor *descriptor) {
 void ParsePrefixLine(string line) {
   string::size_type equals = line.find('=');
   if (equals != string::npos) {
-    prefixes.insert(pair<string, string>(line.substr(0, equals),
-                                         line.substr(equals + 1)));
+    string pkg = line.substr(0, equals);
+    string prefix = line.substr(equals + 1);
+    // Check if this is a wildcard prefix. (eg. com.google.j2objc.*=CGJ)
+    if (pkg.compare(pkg.length() - 2, 2, ".*") == 0) {
+      wildcardPrefixes.insert(
+          std::pair<string, string>(pkg.substr(0, pkg.length() - 2), prefix));
+    } else {
+      prefixes.insert(std::pair<string, string>(pkg, prefix));
+    }
   }
 }
 
 void ParsePrefixFile(string prefix_file) {
-  ifstream in(prefix_file.c_str());
+  std::ifstream in(prefix_file.c_str());
   if (in.is_open()) {
     string line;
     while (in.good()) {

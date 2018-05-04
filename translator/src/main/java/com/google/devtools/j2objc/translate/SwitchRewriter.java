@@ -25,6 +25,7 @@ import com.google.devtools.j2objc.ast.FunctionInvocation;
 import com.google.devtools.j2objc.ast.MethodInvocation;
 import com.google.devtools.j2objc.ast.NativeExpression;
 import com.google.devtools.j2objc.ast.NumberLiteral;
+import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.Statement;
 import com.google.devtools.j2objc.ast.SwitchCase;
 import com.google.devtools.j2objc.ast.SwitchStatement;
@@ -61,9 +62,15 @@ public class SwitchRewriter extends UnitTreeVisitor {
     fixEnumValue(node);
 
     List<Statement> stmts = node.getStatements();
-    if (!stmts.isEmpty() && stmts.get(stmts.size() - 1) instanceof SwitchCase) {
-      // Last switch case doesn't have an associated statement, so add an empty one.
-      stmts.add(new EmptyStatement());
+    if (!stmts.isEmpty()) {
+      Statement lastStmt = stmts.get(stmts.size() - 1);
+      if (lastStmt instanceof SwitchCase) {
+        // Last switch case doesn't have an associated statement, so add an empty one
+        // with the same line number as the switch case to keep line numbers synced.
+        EmptyStatement emptyStmt = new EmptyStatement();
+        emptyStmt.setLineNumber(lastStmt.getLineNumber());
+        stmts.add(emptyStmt);
+      }
     }
   }
 
@@ -79,11 +86,11 @@ public class SwitchRewriter extends UnitTreeVisitor {
       String enumValue =
           NameTable.getNativeEnumName(nameTable.getFullName(TypeUtil.asTypeElement(type))) + "_"
           + nameTable.getVariableBaseName(var);
-      node.setExpression(new NativeExpression(enumValue, typeEnv.resolveJavaTypeMirror("int")));
+      node.setExpression(new NativeExpression(enumValue, typeUtil.getInt()));
     } else if (type.getKind().isPrimitive() && var.getKind() == ElementKind.LOCAL_VARIABLE) {
       Object value = var.getConstantValue();
       if (value != null) {
-        node.setExpression(TreeUtil.newLiteral(value, typeEnv));
+        node.setExpression(TreeUtil.newLiteral(value, typeUtil));
       }
     }
   }
@@ -105,7 +112,7 @@ public class SwitchRewriter extends UnitTreeVisitor {
           Expression initializer = decl.getInitializer();
           if (initializer != null) {
             Assignment assignment = new Assignment(
-                decl.getName().copy(), TreeUtil.remove(initializer));
+                new SimpleName(decl.getVariableElement()), TreeUtil.remove(initializer));
             statements.add(++i, new ExpressionStatement(assignment));
           }
         }
@@ -123,7 +130,7 @@ public class SwitchRewriter extends UnitTreeVisitor {
   private void fixStringValue(SwitchStatement node) {
     Expression expr = node.getExpression();
     TypeMirror type = expr.getTypeMirror();
-    if (!typeEnv.isJavaStringType(type)) {
+    if (!typeUtil.isString(type)) {
       return;
     }
     ArrayType arrayType = typeUtil.getArrayType(type);
@@ -134,17 +141,17 @@ public class SwitchRewriter extends UnitTreeVisitor {
         SwitchCase caseStmt = (SwitchCase) stmt;
         if (!caseStmt.isDefault()) {
           arrayInit.addExpression(TreeUtil.remove(caseStmt.getExpression()));
-          caseStmt.setExpression(NumberLiteral.newIntLiteral(idx++, typeEnv));
+          caseStmt.setExpression(NumberLiteral.newIntLiteral(idx++, typeUtil));
         }
       }
     }
-    TypeMirror intType = typeEnv.resolveJavaTypeMirror("int");
+    TypeMirror intType = typeUtil.getInt();
     FunctionElement indexOfFunc = new FunctionElement("JreIndexOfStr", intType, null)
         .addParameters(type, arrayType, intType);
     FunctionInvocation invocation = new FunctionInvocation(indexOfFunc, intType);
     invocation.addArgument(TreeUtil.remove(expr))
         .addArgument(arrayInit)
-        .addArgument(NumberLiteral.newIntLiteral(idx, typeEnv));
+        .addArgument(NumberLiteral.newIntLiteral(idx, typeUtil));
     node.setExpression(invocation);
   }
 

@@ -32,7 +32,6 @@
 #import "IOSProxyClass.h"
 #import "IOSReflection.h"
 #import "NSCopying+JavaCloneable.h"
-#import "NSException+JavaThrowable.h"
 #import "NSNumber+JavaNumber.h"
 #import "NSObject+JavaObject.h"
 #import "NSString+JavaString.h"
@@ -217,7 +216,7 @@ static LibcoreReflectGenericSignatureParser *NewParsedClassSignature(IOSClass *c
 }
 
 - (NSString *)getName {
-  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:@"abstract method not overridden"]);
+  @throw create_JavaLangAssertionError_initWithId_(@"abstract method not overridden");
 }
 
 - (NSString *)getSimpleName {
@@ -229,7 +228,7 @@ static LibcoreReflectGenericSignatureParser *NewParsedClassSignature(IOSClass *c
 }
 
 - (NSString *)objcName {
-  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:@"abstract method not overridden"]);
+  @throw create_JavaLangAssertionError_initWithId_(@"abstract method not overridden");
 }
 
 - (void)appendMetadataName:(NSMutableString *)str {
@@ -316,7 +315,7 @@ static void GetAllMethods(IOSClass *cls, NSMutableDictionary *methodMap) {
 // class, return a superclass method if available.
 - (JavaLangReflectMethod *)getMethod:(NSString *)name
                       parameterTypes:(IOSObjectArray *)types {
-  nil_chk(name);
+  (void)nil_chk(name);
   JavaLangReflectMethod *method = JreMethodWithNameAndParamTypesInherited(self, name, types);
   if (method && ([method getModifiers] & JavaLangReflectModifier_PUBLIC) > 0) {
     return method;
@@ -358,15 +357,15 @@ static NSString *Capitalize(NSString *s) {
   // Java's getConstructor() only returns the constructor if it's public.
   // However, all constructors in Objective-C are public, so this method
   // is identical to getDeclaredConstructor().
-  @throw AUTORELEASE([[JavaLangNoSuchMethodException alloc] init]);
+  @throw create_JavaLangNoSuchMethodException_init();
 }
 
 - (JavaLangReflectConstructor *)getDeclaredConstructor:(IOSObjectArray *)parameterTypes {
-  @throw AUTORELEASE([[JavaLangNoSuchMethodException alloc] init]);
+  @throw create_JavaLangNoSuchMethodException_init();
 }
 
 - (jboolean)isAssignableFrom:(IOSClass *)cls {
-  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:@"abstract method not overridden"]);
+  @throw create_JavaLangAssertionError_initWithId_(@"abstract method not overridden");
 }
 
 - (IOSClass *)asSubclass:(IOSClass *)cls {
@@ -374,7 +373,7 @@ static NSString *Capitalize(NSString *s) {
     return self;
   }
 
-  @throw AUTORELEASE([[JavaLangClassCastException alloc] initWithNSString:[self description]]);
+  @throw create_JavaLangClassCastException_initWithNSString_([self description]);
 }
 
 - (NSString *)description {
@@ -441,7 +440,7 @@ static NSString *CamelCasePackage(NSString *package) {
 }
 
 static IOSClass *ClassForIosName(NSString *iosName) {
-  nil_chk(iosName);
+  (void)nil_chk(iosName);
   // Some protocols have a sibling class that contains the metadata and any
   // constants that are defined. We must look for the protocol before the class
   // to ensure we create a IOSProtocolClass for such cases. NSObject must be
@@ -613,7 +612,7 @@ static IOSClass *IOSClass_ArrayClassForName(NSString *name, NSUInteger index) {
 }
 
 IOSClass *IOSClass_forName_(NSString *className) {
-  nil_chk(className);
+  (void)nil_chk(className);
   IOSClass *iosClass = nil;
   if ([className length] > 0) {
     if ([className characterAtIndex:0] == '[') {
@@ -644,10 +643,13 @@ IOSClass *IOSClass_forName_initialize_classLoader_(
   return IOSClass_forName_initialize_classLoader_(className, load, loader);
 }
 
-- (id)cast:(id)throwable {
-  // There's no need to actually cast this here, as the translator will add
-  // a C cast since the return type is a type variable.
-  return throwable;
+- (id)cast:(id)object {
+  if (__builtin_expect(object && ![self isInstance:object], 0)) {
+    @throw create_JavaLangClassCastException_initWithNSString_(
+        [NSString stringWithFormat:@"Cannot cast object of type %@ to %@",
+            [[object java_getClass] getName], [self getName]]);
+  }
+  return object;
 }
 
 - (IOSClass *)getEnclosingClass {
@@ -716,9 +718,9 @@ static jboolean hasModifier(IOSClass *cls, int flag) {
 }
 
 // Checks if a ObjC protocol is a translated Java interface.
-bool IsJavaInterface(Protocol *protocol) {
+bool IsJavaInterface(Protocol *protocol, bool excludeNSCopying) {
   if (protocol == @protocol(NSCopying)) {
-    return true;
+    return !excludeNSCopying;
   }
   unsigned int count;
   Protocol **protocolList = protocol_copyProtocolList(protocol, &count);
@@ -737,14 +739,15 @@ bool IsJavaInterface(Protocol *protocol) {
   return result;
 }
 
-IOSObjectArray *IOSClass_NewInterfacesFromProtocolList(Protocol **list, unsigned int count) {
+IOSObjectArray *IOSClass_NewInterfacesFromProtocolList(
+    Protocol **list, unsigned int count, bool excludeNSCopying) {
   IOSClass *buffer[count];
   unsigned int actualCount = 0;
   for (unsigned int i = 0; i < count; i++) {
     Protocol *protocol = list[i];
     // It is not uncommon for protocols to be added to classes like NSObject using categories. Here
     // we filter out any protocols that aren't translated from Java interfaces.
-    if (IsJavaInterface(protocol)) {
+    if (IsJavaInterface(protocol, excludeNSCopying)) {
       buffer[actualCount++] = IOSClass_fromProtocol(list[i]);
     }
   }
@@ -764,7 +767,7 @@ IOSObjectArray *IOSClass_NewInterfacesFromProtocolList(Protocol **list, unsigned
 }
 
 - (id<JavaLangAnnotationAnnotation>)getAnnotationWithIOSClass:(IOSClass *)annotationClass {
-  nil_chk(annotationClass);
+  (void)nil_chk(annotationClass);
   IOSObjectArray *annotations = [self getAnnotations];
   jint n = annotations->size_;
   for (jint i = 0; i < n; i++) {
@@ -883,38 +886,9 @@ static void GetFieldsFromClass(IOSClass *iosClass, NSMutableDictionary *fields,
   };
 }
 
-JavaLangReflectField *findDeclaredField(IOSClass *iosClass, NSString *name, jboolean publicOnly) {
-  const J2ObjcClassInfo *metadata = IOSClass_GetMetadataOrFail(iosClass);
-  const J2ObjcFieldInfo *fieldMeta = JreFindFieldInfo(metadata, [name UTF8String]);
-  if (fieldMeta && (!publicOnly || (fieldMeta->modifiers & JavaLangReflectModifier_PUBLIC) != 0)) {
-    Ivar ivar = class_getInstanceVariable(iosClass.objcClass, fieldMeta->name);
-    return [JavaLangReflectField fieldWithIvar:ivar
-                                     withClass:iosClass
-                                  withMetadata:fieldMeta];
-  }
-  return nil;
-}
-
-static JavaLangReflectField *findField(IOSClass *iosClass, NSString *name) {
-  while (iosClass) {
-    JavaLangReflectField *field = findDeclaredField(iosClass, name, true);
-    if (field) {
-      return field;
-    }
-    for (IOSClass *p in [iosClass getInterfacesInternal]) {
-      JavaLangReflectField *field = findField(p, name);
-      if (field) {
-        return field;
-      }
-    }
-    iosClass = [iosClass getSuperclass];
-  }
-  return nil;
-}
-
 - (JavaLangReflectField *)getDeclaredField:(NSString *)name {
-  nil_chk(name);
-  JavaLangReflectField *field = findDeclaredField(self, name, false);
+  (void)nil_chk(name);
+  JavaLangReflectField *field = FindDeclaredField(self, name, false);
   if (field) {
     return field;
   }
@@ -922,8 +896,8 @@ static JavaLangReflectField *findField(IOSClass *iosClass, NSString *name) {
 }
 
 - (JavaLangReflectField *)getField:(NSString *)name {
-  nil_chk(name);
-  JavaLangReflectField *field = findField(self, name);
+  (void)nil_chk(name);
+  JavaLangReflectField *field = FindField(self, name, true);
   if (field) {
     return field;
   }
@@ -1167,7 +1141,7 @@ IOSClass *IOSClass_NewProxyClass(Class cls) {
   if (!FastPointerLookupAddMapping(&classLookup, cls, result)) {
     // This function should only be called by java.lang.reflect.Proxy
     // immediately after creating a new proxy class.
-    @throw AUTORELEASE([[JavaLangAssertionError alloc] init]);
+    @throw create_JavaLangAssertionError_init();
   }
   return result;
 }
@@ -1209,7 +1183,6 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
          @"IOSClass",    @"java.lang.Class",
          @"NSNumber",    @"java.lang.Number",
          @"NSString",    @"java.lang.String",
-         @"NSException", @"java.lang.Throwable",
          @"NSCopying",   @"java.lang.Cloneable", nil];
 
     IOSClass_byteClass = [[IOSPrimitiveClass alloc] initWithName:@"byte" type:@"B"];
@@ -1230,7 +1203,6 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
     [JreObjectCategoryDummy class];
     [JreStringCategoryDummy class];
     [JreNumberCategoryDummy class];
-    [JreThrowableCategoryDummy class];
     [NSCopying class];
 
     // Verify that these categories successfully loaded.
@@ -1249,6 +1221,7 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
 // Generated by running the translator over the java.lang.Class stub file.
 + (const J2ObjcClassInfo *)__metadata {
   static J2ObjcMethodInfo methods[] = {
+    { NULL, NULL, 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LIOSClass;", 0x9, 0, 1, 2, 3, -1, -1 },
     { NULL, "LIOSClass;", 0x9, 0, 4, 2, 5, -1, -1 },
     { NULL, "LIOSClass;", 0x1, 6, 7, -1, 8, -1, -1 },
@@ -1257,129 +1230,128 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
     { NULL, "LJavaLangAnnotationAnnotation;", 0x1, 12, 7, -1, 13, -1, -1 },
     { NULL, "[LJavaLangAnnotationAnnotation;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "[LIOSClass;", 0x1, -1, -1, -1, -1, -1, -1 },
+    { NULL, "[LIOSClass;", 0x1, -1, -1, -1, 14, -1, -1 },
     { NULL, "LJavaLangClassLoader;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 14, -1, -1 },
-    { NULL, "LJavaLangReflectConstructor;", 0x81, 15, 16, 17, 18, -1, -1 },
-    { NULL, "[LJavaLangReflectConstructor;", 0x1, -1, -1, 19, -1, -1, -1 },
+    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 15, -1, -1 },
+    { NULL, "LJavaLangReflectConstructor;", 0x81, 16, 17, 18, 19, -1, -1 },
+    { NULL, "[LJavaLangReflectConstructor;", 0x1, -1, -1, 20, 21, -1, -1 },
     { NULL, "[LJavaLangAnnotationAnnotation;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "[LIOSClass;", 0x1, -1, -1, 19, -1, -1, -1 },
-    { NULL, "LJavaLangReflectConstructor;", 0x81, 20, 16, 17, 18, -1, -1 },
-    { NULL, "[LJavaLangReflectConstructor;", 0x1, -1, -1, 19, -1, -1, -1 },
-    { NULL, "LJavaLangReflectField;", 0x1, 21, 1, 22, -1, -1, -1 },
-    { NULL, "[LJavaLangReflectField;", 0x1, -1, -1, 19, -1, -1, -1 },
-    { NULL, "LJavaLangReflectMethod;", 0x81, 23, 24, 17, -1, -1, -1 },
-    { NULL, "[LJavaLangReflectMethod;", 0x1, -1, -1, 19, -1, -1, -1 },
-    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 14, -1, -1 },
-    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 14, -1, -1 },
-    { NULL, "LJavaLangReflectConstructor;", 0x1, -1, -1, -1, 25, -1, -1 },
+    { NULL, "[LIOSClass;", 0x1, -1, -1, 20, 14, -1, -1 },
+    { NULL, "LJavaLangReflectConstructor;", 0x81, 22, 17, 18, 19, -1, -1 },
+    { NULL, "[LJavaLangReflectConstructor;", 0x1, -1, -1, 20, 21, -1, -1 },
+    { NULL, "LJavaLangReflectField;", 0x1, 23, 1, 24, -1, -1, -1 },
+    { NULL, "[LJavaLangReflectField;", 0x1, -1, -1, 20, -1, -1, -1 },
+    { NULL, "LJavaLangReflectMethod;", 0x81, 25, 26, 18, 27, -1, -1 },
+    { NULL, "[LJavaLangReflectMethod;", 0x1, -1, -1, 20, -1, -1, -1 },
+    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 15, -1, -1 },
+    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 15, -1, -1 },
+    { NULL, "LJavaLangReflectConstructor;", 0x1, -1, -1, -1, 28, -1, -1 },
     { NULL, "LJavaLangReflectMethod;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "[LNSObject;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "[LNSObject;", 0x0, -1, -1, -1, -1, -1, -1 },
-    { NULL, "LJavaLangReflectField;", 0x1, 26, 1, 22, -1, -1, -1 },
-    { NULL, "[LJavaLangReflectField;", 0x1, -1, -1, 19, -1, -1, -1 },
+    { NULL, "[LNSObject;", 0x1, -1, -1, -1, 29, -1, -1 },
+    { NULL, "[LNSObject;", 0x0, -1, -1, -1, 29, -1, -1 },
+    { NULL, "LJavaLangReflectField;", 0x1, 30, 1, 24, -1, -1, -1 },
+    { NULL, "[LJavaLangReflectField;", 0x1, -1, -1, 20, -1, -1, -1 },
     { NULL, "[LJavaLangReflectType;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LJavaLangReflectType;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "[LIOSClass;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "LJavaLangReflectMethod;", 0x81, 27, 24, 17, -1, -1, -1 },
-    { NULL, "[LJavaLangReflectMethod;", 0x1, -1, -1, 19, -1, -1, -1 },
+    { NULL, "[LIOSClass;", 0x1, -1, -1, -1, 14, -1, -1 },
+    { NULL, "LJavaLangReflectMethod;", 0x81, 31, 26, 18, 27, -1, -1 },
+    { NULL, "[LJavaLangReflectMethod;", 0x1, -1, -1, 20, -1, -1, -1 },
     { NULL, "I", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LJavaLangPackage;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LJavaSecurityProtectionDomain;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "LJavaNetURL;", 0x1, 28, 1, -1, -1, -1, -1 },
-    { NULL, "LJavaIoInputStream;", 0x1, 29, 1, -1, -1, -1, -1 },
+    { NULL, "LJavaNetURL;", 0x1, 32, 1, -1, -1, -1, -1 },
+    { NULL, "LJavaIoInputStream;", 0x1, 33, 1, -1, -1, -1, -1 },
     { NULL, "[LNSObject;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 30, -1, -1 },
-    { NULL, "[LJavaLangReflectTypeVariable;", 0x1, -1, -1, -1, -1, -1, -1 },
+    { NULL, "LIOSClass;", 0x1, -1, -1, -1, 34, -1, -1 },
+    { NULL, "[LJavaLangReflectTypeVariable;", 0x1, -1, -1, -1, 35, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "Z", 0x1, 31, 7, -1, 32, -1, -1 },
-    { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "Z", 0x1, 33, 7, -1, 34, -1, -1 },
-    { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "Z", 0x1, 35, 10, -1, -1, -1, -1 },
+    { NULL, "Z", 0x1, 36, 7, -1, 37, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
+    { NULL, "Z", 0x1, 38, 7, -1, 39, -1, -1 },
+    { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
+    { NULL, "Z", 0x1, 40, 10, -1, -1, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, "LNSObject;", 0x1, -1, -1, 36, 37, -1, -1 },
-    { NULL, "LNSString;", 0x1, 38, -1, -1, -1, -1, -1 },
-    { NULL, "[LJavaLangAnnotationAnnotation;", 0x1, 39, 7, -1, 40, -1, -1 },
-    { NULL, "[LJavaLangAnnotationAnnotation;", 0x1, 41, 7, -1, 40, -1, -1 },
-    { NULL, "LJavaLangAnnotationAnnotation;", 0x1, 42, 7, -1, 43, -1, -1 },
+    { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
+    { NULL, "Z", 0x1, -1, -1, -1, -1, -1, -1 },
+    { NULL, "LNSObject;", 0x1, -1, -1, 41, 42, -1, -1 },
+    { NULL, "LNSString;", 0x1, 43, -1, -1, -1, -1, -1 },
+    { NULL, "[LJavaLangAnnotationAnnotation;", 0x1, 44, 7, -1, 45, -1, -1 },
+    { NULL, "[LJavaLangAnnotationAnnotation;", 0x1, 46, 7, -1, 45, -1, -1 },
+    { NULL, "LJavaLangAnnotationAnnotation;", 0x1, 47, 7, -1, 48, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
     { NULL, "LNSString;", 0x1, -1, -1, -1, -1, -1, -1 },
-    { NULL, NULL, 0x1, -1, -1, -1, -1, -1, -1 },
   };
   #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wobjc-multiple-method-names"
-  methods[0].selector = @selector(forName:);
-  methods[1].selector = @selector(forName:initialize:classLoader:);
-  methods[2].selector = @selector(asSubclass:);
-  methods[3].selector = @selector(cast:);
-  methods[4].selector = @selector(desiredAssertionStatus);
-  methods[5].selector = @selector(getAnnotationWithIOSClass:);
-  methods[6].selector = @selector(getAnnotations);
-  methods[7].selector = @selector(getCanonicalName);
-  methods[8].selector = @selector(getClasses);
-  methods[9].selector = @selector(getClassLoader);
-  methods[10].selector = @selector(getComponentType);
-  methods[11].selector = @selector(getConstructor:);
-  methods[12].selector = @selector(getConstructors);
-  methods[13].selector = @selector(getDeclaredAnnotations);
-  methods[14].selector = @selector(getDeclaredClasses);
-  methods[15].selector = @selector(getDeclaredConstructor:);
-  methods[16].selector = @selector(getDeclaredConstructors);
-  methods[17].selector = @selector(getDeclaredField:);
-  methods[18].selector = @selector(getDeclaredFields);
-  methods[19].selector = @selector(getDeclaredMethod:parameterTypes:);
-  methods[20].selector = @selector(getDeclaredMethods);
-  methods[21].selector = @selector(getDeclaringClass);
-  methods[22].selector = @selector(getEnclosingClass);
-  methods[23].selector = @selector(getEnclosingConstructor);
-  methods[24].selector = @selector(getEnclosingMethod);
-  methods[25].selector = @selector(getEnumConstants);
-  methods[26].selector = @selector(getEnumConstantsShared);
-  methods[27].selector = @selector(getField:);
-  methods[28].selector = @selector(getFields);
-  methods[29].selector = @selector(getGenericInterfaces);
-  methods[30].selector = @selector(getGenericSuperclass);
-  methods[31].selector = @selector(getInterfaces);
-  methods[32].selector = @selector(getMethod:parameterTypes:);
-  methods[33].selector = @selector(getMethods);
-  methods[34].selector = @selector(getModifiers);
-  methods[35].selector = @selector(getName);
-  methods[36].selector = @selector(getPackage);
-  methods[37].selector = @selector(getProtectionDomain);
-  methods[38].selector = @selector(getResource:);
-  methods[39].selector = @selector(getResourceAsStream:);
-  methods[40].selector = @selector(getSigners);
-  methods[41].selector = @selector(getSimpleName);
-  methods[42].selector = @selector(getSuperclass);
-  methods[43].selector = @selector(getTypeParameters);
-  methods[44].selector = @selector(isAnnotation);
-  methods[45].selector = @selector(isAnnotationPresentWithIOSClass:);
-  methods[46].selector = @selector(isAnonymousClass);
-  methods[47].selector = @selector(isArray);
-  methods[48].selector = @selector(isAssignableFrom:);
-  methods[49].selector = @selector(isEnum);
-  methods[50].selector = @selector(isInstance:);
-  methods[51].selector = @selector(isInterface);
-  methods[52].selector = @selector(isLocalClass);
-  methods[53].selector = @selector(isMemberClass);
-  methods[54].selector = @selector(isPrimitive);
-  methods[55].selector = @selector(isSynthetic);
-  methods[56].selector = @selector(newInstance);
-  methods[57].selector = @selector(description);
-  methods[58].selector = @selector(getDeclaredAnnotationsByTypeWithIOSClass:);
-  methods[59].selector = @selector(getAnnotationsByTypeWithIOSClass:);
-  methods[60].selector = @selector(getDeclaredAnnotationWithIOSClass:);
-  methods[61].selector = @selector(getTypeName);
-  methods[62].selector = @selector(toGenericString);
-  methods[63].selector = @selector(init);
+  methods[0].selector = @selector(init);
+  methods[1].selector = @selector(forName:);
+  methods[2].selector = @selector(forName:initialize:classLoader:);
+  methods[3].selector = @selector(asSubclass:);
+  methods[4].selector = @selector(cast:);
+  methods[5].selector = @selector(desiredAssertionStatus);
+  methods[6].selector = @selector(getAnnotationWithIOSClass:);
+  methods[7].selector = @selector(getAnnotations);
+  methods[8].selector = @selector(getCanonicalName);
+  methods[9].selector = @selector(getClasses);
+  methods[10].selector = @selector(getClassLoader);
+  methods[11].selector = @selector(getComponentType);
+  methods[12].selector = @selector(getConstructor:);
+  methods[13].selector = @selector(getConstructors);
+  methods[14].selector = @selector(getDeclaredAnnotations);
+  methods[15].selector = @selector(getDeclaredClasses);
+  methods[16].selector = @selector(getDeclaredConstructor:);
+  methods[17].selector = @selector(getDeclaredConstructors);
+  methods[18].selector = @selector(getDeclaredField:);
+  methods[19].selector = @selector(getDeclaredFields);
+  methods[20].selector = @selector(getDeclaredMethod:parameterTypes:);
+  methods[21].selector = @selector(getDeclaredMethods);
+  methods[22].selector = @selector(getDeclaringClass);
+  methods[23].selector = @selector(getEnclosingClass);
+  methods[24].selector = @selector(getEnclosingConstructor);
+  methods[25].selector = @selector(getEnclosingMethod);
+  methods[26].selector = @selector(getEnumConstants);
+  methods[27].selector = @selector(getEnumConstantsShared);
+  methods[28].selector = @selector(getField:);
+  methods[29].selector = @selector(getFields);
+  methods[30].selector = @selector(getGenericInterfaces);
+  methods[31].selector = @selector(getGenericSuperclass);
+  methods[32].selector = @selector(getInterfaces);
+  methods[33].selector = @selector(getMethod:parameterTypes:);
+  methods[34].selector = @selector(getMethods);
+  methods[35].selector = @selector(getModifiers);
+  methods[36].selector = @selector(getName);
+  methods[37].selector = @selector(getPackage);
+  methods[38].selector = @selector(getProtectionDomain);
+  methods[39].selector = @selector(getResource:);
+  methods[40].selector = @selector(getResourceAsStream:);
+  methods[41].selector = @selector(getSigners);
+  methods[42].selector = @selector(getSimpleName);
+  methods[43].selector = @selector(getSuperclass);
+  methods[44].selector = @selector(getTypeParameters);
+  methods[45].selector = @selector(isAnnotation);
+  methods[46].selector = @selector(isAnnotationPresentWithIOSClass:);
+  methods[47].selector = @selector(isAnonymousClass);
+  methods[48].selector = @selector(isArray);
+  methods[49].selector = @selector(isAssignableFrom:);
+  methods[50].selector = @selector(isEnum);
+  methods[51].selector = @selector(isInstance:);
+  methods[52].selector = @selector(isInterface);
+  methods[53].selector = @selector(isLocalClass);
+  methods[54].selector = @selector(isMemberClass);
+  methods[55].selector = @selector(isPrimitive);
+  methods[56].selector = @selector(isSynthetic);
+  methods[57].selector = @selector(newInstance);
+  methods[58].selector = @selector(description);
+  methods[59].selector = @selector(getDeclaredAnnotationsByTypeWithIOSClass:);
+  methods[60].selector = @selector(getAnnotationsByTypeWithIOSClass:);
+  methods[61].selector = @selector(getDeclaredAnnotationWithIOSClass:);
+  methods[62].selector = @selector(getTypeName);
+  methods[63].selector = @selector(toGenericString);
   #pragma clang diagnostic pop
   static const J2ObjcFieldInfo fields[] = {
     { "serialVersionUID", "J", .constantValue.asLong = IOSClass_serialVersionUID, 0x1a, -1, -1, -1,
@@ -1391,13 +1363,16 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
     "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class<*>;", "asSubclass", "LIOSClass;",
     "<U:Ljava/lang/Object;>(Ljava/lang/Class<TU;>;)Ljava/lang/Class<+TU;>;", "cast", "LNSObject;",
     "(Ljava/lang/Object;)TT;", "getAnnotation",
-    "<A::Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TA;>;)TA;", "()Ljava/lang/Class<*>;",
-    "getConstructor", "[LIOSClass;", "LJavaLangNoSuchMethodException;LJavaLangSecurityException;",
+    "<A::Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TA;>;)TA;", "()[Ljava/lang/Class<*>;",
+    "()Ljava/lang/Class<*>;", "getConstructor", "[LIOSClass;",
+    "LJavaLangNoSuchMethodException;LJavaLangSecurityException;",
     "([Ljava/lang/Class<*>;)Ljava/lang/reflect/Constructor<TT;>;", "LJavaLangSecurityException;",
-    "getDeclaredConstructor", "getDeclaredField",
+    "()[Ljava/lang/reflect/Constructor<*>;", "getDeclaredConstructor", "getDeclaredField",
     "LJavaLangNoSuchFieldException;LJavaLangSecurityException;", "getDeclaredMethod",
-    "LNSString;[LIOSClass;", "()Ljava/lang/reflect/Constructor<*>;", "getField", "getMethod",
-    "getResource", "getResourceAsStream", "()Ljava/lang/Class<-TT;>;", "isAnnotationPresent",
+    "LNSString;[LIOSClass;", "(Ljava/lang/String;[Ljava/lang/Class<*>;)Ljava/lang/reflect/Method;",
+    "()Ljava/lang/reflect/Constructor<*>;", "()[TT;", "getField", "getMethod", "getResource",
+    "getResourceAsStream", "()Ljava/lang/Class<-TT;>;",
+    "()[Ljava/lang/reflect/TypeVariable<Ljava/lang/Class<TT;>;>;", "isAnnotationPresent",
     "(Ljava/lang/Class<+Ljava/lang/annotation/Annotation;>;)Z", "isAssignableFrom",
     "(Ljava/lang/Class<*>;)Z", "isInstance",
     "LJavaLangInstantiationException;LJavaLangIllegalAccessException;", "()TT;", "toString",
@@ -1407,9 +1382,18 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
     "<T:Ljava/lang/Object;>Ljava/lang/Object;Ljava/lang/reflect/AnnotatedElement;"
     "Ljava/lang/reflect/GenericDeclaration;Ljava/io/Serializable;Ljava/lang/reflect/Type;" };
   static const J2ObjcClassInfo _IOSClass = {
-    "Class", "java.lang", ptrTable, methods, fields, 7, 0x11, 64, 1, -1, -1, -1, 44, -1 };
+    "Class", "java.lang", ptrTable, methods, fields, 7, 0x11, 64, 1, -1, -1, -1, 49, -1 };
   return &_IOSClass;
 }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wobjc-missing-super-calls"
+- (void)dealloc {
+  @throw create_JavaLangAssertionError_initWithId_(
+      [NSString stringWithFormat:@"Unexpected IOSClass dealloc: %@", [self getName]]);
+  // Don't call [super dealloc], since clang will correctly warn that it's unreachable code.
+}
+#pragma clang diagnostic pop
 
 @end
 

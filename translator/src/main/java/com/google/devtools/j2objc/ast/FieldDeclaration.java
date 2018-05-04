@@ -14,17 +14,17 @@
 
 package com.google.devtools.j2objc.ast;
 
-import com.google.devtools.j2objc.jdt.BindingConverter;
 import java.util.List;
 import javax.lang.model.element.VariableElement;
-import org.eclipse.jdt.core.dom.IVariableBinding;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Node for a field declaration.
  */
 public class FieldDeclaration extends BodyDeclaration {
 
-  private ChildLink<Type> type = ChildLink.create(Type.class, this);
+  // TODO(user): Change fragments to ChildLink after JDT code is dropped. With Javac,
+  // FieldDeclaration only has one VariableDeclarationFragment.
   private ChildList<VariableDeclarationFragment> fragments =
       ChildList.create(VariableDeclarationFragment.class, this);
 
@@ -32,24 +32,16 @@ public class FieldDeclaration extends BodyDeclaration {
 
   public FieldDeclaration(FieldDeclaration other) {
     super(other);
-    type.copyFrom(other.getType());
     fragments.copyFrom(other.getFragments());
   }
 
   public FieldDeclaration(VariableDeclarationFragment fragment) {
-    super(fragment.getVariableBinding());
-    type.set(Type.newType(fragment.getVariableBinding().getType()));
+    super(fragment.getVariableElement());
     fragments.add(fragment);
-  }
-
-  // TODO(tball): remove when javac migration is complete.
-  public FieldDeclaration(IVariableBinding variableBinding, Expression initializer) {
-    this((VariableElement) BindingConverter.getElement(variableBinding), initializer);
   }
 
   public FieldDeclaration(VariableElement variableElement, Expression initializer) {
     super(variableElement);
-    type.set(Type.newType(variableElement.asType()));
     fragments.add(new VariableDeclarationFragment(variableElement, initializer));
   }
 
@@ -58,13 +50,8 @@ public class FieldDeclaration extends BodyDeclaration {
     return Kind.FIELD_DECLARATION;
   }
 
-  public Type getType() {
-    return type.get();
-  }
-
-  public FieldDeclaration setType(Type newType) {
-    type.set(newType);
-    return this;
+  public TypeMirror getTypeMirror() {
+    return fragments.get(0).getVariableElement().asType();
   }
 
   public VariableDeclarationFragment getFragment(int index) {
@@ -85,7 +72,6 @@ public class FieldDeclaration extends BodyDeclaration {
     if (visitor.visit(this)) {
       javadoc.accept(visitor);
       annotations.accept(visitor);
-      type.accept(visitor);
       fragments.accept(visitor);
     }
     visitor.endVisit(this);

@@ -51,17 +51,16 @@ class MessageGenerator {
   explicit MessageGenerator(const Descriptor* descriptor);
   ~MessageGenerator();
 
-  void GenerateEnumHeader(io::Printer* printer);
-  void GenerateMessageHeader(io::Printer* printer);
   void GenerateHeader(io::Printer* printer);
   void GenerateSource(io::Printer* printer);
   void GenerateMessageOrBuilder(io::Printer* printer);
   void GenerateExtensionRegistrationCode(io::Printer* printer);
-  void CollectForwardDeclarations(set<string> &declarations) const;
-  void CollectMessageOrBuilderForwardDeclarations(set<string> &declarations)
-      const;
-  void CollectMessageOrBuilderImports(set<string> &imports) const;
-  void CollectSourceImports(set<string> &imports);
+  void CollectForwardDeclarations(std::set<string>* declarations) const;
+  void CollectMessageOrBuilderForwardDeclarations(
+      std::set<string>* declarations) const;
+  void CollectMessageOrBuilderImports(std::set<string>* imports) const;
+  void CollectHeaderImports(std::set<string>* imports) const;
+  void CollectSourceImports(std::set<string>* imports) const;
 
  private:
   void GenerateBuilderHeader(io::Printer* printer);

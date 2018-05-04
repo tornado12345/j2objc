@@ -36,10 +36,7 @@ APACHE_HARMONY_BASE = apache_harmony/classlib/modules
 JRE_ROOT = $(APACHE_HARMONY_BASE)/luni/src/main/java
 JRE_ARCHIVE_ROOT = $(APACHE_HARMONY_BASE)/archive/src/main/java
 JRE_BEANS_ROOT = $(APACHE_HARMONY_BASE)/beans/src/main/java
-JRE_CONCURRENT_ROOT = $(APACHE_HARMONY_BASE)/concurrent/src/main/java
 JRE_KERNEL_ROOT = $(APACHE_HARMONY_BASE)/luni-kernel/src/main/java
-JRE_MATH_ROOT = $(APACHE_HARMONY_BASE)/math/src/main/java
-JRE_NIO_CHAR_ROOT = $(APACHE_HARMONY_BASE)/nio_char/src/main/java
 JRE_TEST_ROOT = $(APACHE_HARMONY_BASE)/luni/src/test/api/common
 JRE_MATH_TEST_ROOT = $(APACHE_HARMONY_BASE)/math/src/test/java
 JRE_TEXT_TEST_ROOT = $(APACHE_HARMONY_BASE)/text/src/test/java
@@ -60,28 +57,37 @@ ANDROID_PLATFORM = android/platform
 ANDROID_CORE_ROOT = $(ANDROID_BASE)/frameworks/base/core/java
 ANDROID_CORE_TESTS_ROOT = $(ANDROID_BASE)/frameworks/base/core/tests/coretests/src
 LIBCORE_BASE = $(ANDROID_BASE)/libcore
-ANDROID_DALVIK_ROOT = $(LIBCORE_BASE)/dalvik/src/main/java
 ANDROID_JSON_ROOT = $(LIBCORE_BASE)/json/src/main/java
 ANDROID_JSON_TEST_ROOT = $(LIBCORE_BASE)/json/src/test/java
 ANDROID_LUNI_ROOT = $(LIBCORE_BASE)/luni/src/main/java
 ANDROID_LUNI_TEST_ROOT = $(LIBCORE_BASE)/luni/src/test/java
 ANDROID_TEST_SUPPORT_ROOT = $(LIBCORE_BASE)/support/src/test/java
-ANDROID_XML_ROOT = $(LIBCORE_BASE)/xml/src/main/java
 ANDROID_APACHE_TEST_ROOT = $(LIBCORE_BASE)/harmony-tests/src/test/java
 ANDROID_TESTS_RUNNER_ROOT = $(ANDROID_BASE)/frameworks/base/tests-runner/src
 ANDROID_JSR166_TEST_ROOT = $(LIBCORE_BASE)/jsr166-tests/src/test/java
 MOCKWEBSERVER_ROOT = $(ANDROID_PLATFORM)/external/mockwebserver/src/main/java
+APACHE_COMMONS_LANG_TEST_ROOT = apache_commons_lang/src/test/java
 
 # OpenJDK migration definitions.
 # TODO(tball): rename to above names when migration is complete.
 NEW_LIBCORE_BASE = $(ANDROID_PLATFORM)/libcore
+ANDROID_DALVIK_ROOT = $(NEW_LIBCORE_BASE)/dalvik/src/main/java
+ANDROID_DALVIK_TEST_ROOT = $(NEW_LIBCORE_BASE)/dalvik/src/test/java
 NEW_ANDROID_LUNI_ROOT = $(NEW_LIBCORE_BASE)/luni/src/main/java
+J2OBJC_LUNI_ROOT = $(NEW_LIBCORE_BASE)/luni/src/objc/java
+J2OBJC_LUNI_NATIVE = $(NEW_LIBCORE_BASE)/luni/src/objc/native
 ANDROID_OPENJDK_ROOT = $(NEW_LIBCORE_BASE)/ojluni/src/main/java
-J2OBJC_OPENJDK_ROOT = $(NEW_LIBCORE_BASE)/ojluni/src/objc/java
+ANDROID_OPENJDK_NATIVE = $(NEW_LIBCORE_BASE)/ojluni/src/main/native
+ANDROID_XML_ROOT = $(NEW_LIBCORE_BASE)/xml/src/main/java
 NEW_ANDROID_LUNI_TEST_ROOT = $(NEW_LIBCORE_BASE)/luni/src/test/java
 NEW_ANDROID_TEST_SUPPORT_ROOT = $(NEW_LIBCORE_BASE)/support/src/test/java
+NEW_ANDROID_APACHE_TEST_ROOT = $(NEW_LIBCORE_BASE)/harmony-tests/src/test/java
 OKIO_ROOT = $(ANDROID_PLATFORM)/external/okhttp/okio/okio/src/main/java
 OKIO_TEST_ROOT = $(ANDROID_PLATFORM)/external/okhttp/okio/okio/src/test/java
+NEW_ANDROID_LUNI_NATIVE = $(NEW_LIBCORE_BASE)/luni/src/main/native
+NEW_ANDROID_JSR166_TEST_ROOT = $(NEW_LIBCORE_BASE)/jsr166-tests/src/test/java
+
+OPENJDK_ROOT = openjdk/src/share/classes
 
 APPLE_ROOT = apple_apsl
 
@@ -89,7 +95,6 @@ MISC_TEST_ROOT = Tests
 J2OBJC_ROOT = ..
 
 ANDROID_INCLUDE = $(LIBCORE_BASE)/include
-
 
 include ../make/common.mk
 include ../make/j2objc_deps.mk
@@ -121,12 +126,12 @@ else
 RESOURCES_DEST_DIR = $(TESTS_DIR)
 endif
 
-JRE_SRC_ROOTS = $(JRE_ROOT) $(JRE_CONCURRENT_ROOT) $(JRE_KERNEL_ROOT) \
-    $(JRE_MATH_ROOT) $(ANDROID_DALVIK_ROOT) $(ANDROID_LUNI_ROOT) \
+JRE_SRC_ROOTS = $(JRE_ROOT) $(JRE_KERNEL_ROOT) \
+    $(ANDROID_DALVIK_ROOT) $(ANDROID_LUNI_ROOT) \
     $(ANDROID_XML_ROOT) $(EMULATION_CLASS_DIR) $(JRE_ARCHIVE_ROOT) \
     $(ANDROID_CORE_ROOT) $(ANDROID_JSON_ROOT) $(J2OBJC_ANNOTATIONS_ROOT) \
-    $(JRE_BEANS_ROOT) $(NEW_ANDROID_LUNI_ROOT) $(ANDROID_OPENJDK_ROOT) \
-    $(OKIO_ROOT) $(LAMBDA_DIR) $(J2OBJC_OPENJDK_ROOT) $(JRE_NIO_CHAR_ROOT)
+    $(JRE_BEANS_ROOT) $(NEW_ANDROID_LUNI_ROOT) $(J2OBJC_LUNI_ROOT) $(ANDROID_OPENJDK_ROOT) \
+    $(OKIO_ROOT) $(LAMBDA_DIR) $(OPENJDK_ROOT) $(STUBS_DIR)
 JRE_SRC = $(subst $(eval) ,:,$(JRE_SRC_ROOTS))
 TEST_SRC_ROOTS = $(JRE_TEST_ROOT) $(JRE_MATH_TEST_ROOT) \
     $(TEST_SUPPORT_ROOT) $(MATH_TEST_SUPPORT_ROOT) $(REGEX_TEST_ROOT) \
@@ -137,9 +142,14 @@ TEST_SRC_ROOTS = $(JRE_TEST_ROOT) $(JRE_MATH_TEST_ROOT) \
     $(ANDROID_JSON_TEST_ROOT) $(BEANS_TEST_ROOT) $(BEANS_TEST_SUPPORT_ROOT) \
     $(ANDROID_JSR166_TEST_ROOT) $(MOCKWEBSERVER_ROOT) \
     $(NEW_ANDROID_LUNI_TEST_ROOT) $(OKIO_TEST_ROOT) \
-    $(NEW_ANDROID_TEST_SUPPORT_ROOT)
+    $(NEW_ANDROID_TEST_SUPPORT_ROOT) $(NEW_ANDROID_APACHE_TEST_ROOT) \
+    $(NEW_ANDROID_JSR166_TEST_ROOT) $(ANDROID_DALVIK_TEST_ROOT) \
+    $(APACHE_COMMONS_LANG_TEST_ROOT)
 TEST_SRC = $(subst $(eval) ,:,$(TEST_SRC_ROOTS))
-vpath %.java $(JRE_SRC):$(TEST_SRC):$(STUBS_DIR)
+vpath %.java $(JRE_SRC):$(TEST_SRC)
+
+NATIVE_SOURCE_DIRS = $(EMULATION_CLASS_DIR) $(APPLE_ROOT) $(ANDROID_NATIVE_DIR) \
+  $(ANDROID_OPENJDK_NATIVE) $(J2OBJC_LUNI_NATIVE) $(NEW_ANDROID_LUNI_NATIVE)
 
 # Clang warnings
 WARNINGS := $(CC_WARNINGS) $(WARNINGS) -Wno-unused-label -Wno-dangling-else
@@ -154,7 +164,7 @@ OBJCFLAGS += $(WARNINGS) -fno-strict-overflow \
   -fobjc-abi-version=2 -fobjc-legacy-dispatch $(DEBUGFLAGS) \
   -I/System/Library/Frameworks/ExceptionHandling.framework/Headers \
   -I/System/Library/Frameworks/Security.framework/Headers \
-  -I$(ANDROID_INCLUDE) -I$(APPLE_ROOT)
+  -I$(ANDROID_INCLUDE) $(NATIVE_SOURCE_DIRS:%=-I%)
 
 # Only use the icu headers when building for OSX. For IOS these headers should
 # be available in the SDK.

@@ -17,8 +17,7 @@
 package com.google.devtools.j2objc.types;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
-
+import com.google.devtools.j2objc.util.HeaderMap;
 import java.io.IOException;
 
 /**
@@ -27,12 +26,6 @@ import java.io.IOException;
  * @author Tom Ball
  */
 public class ImplementationImportCollectorTest extends GenerationTest {
-
-  @Override
-  protected void tearDown() throws Exception {
-    Options.setOutputStyle(Options.DEFAULT_OUTPUT_STYLE_OPTION);
-    super.tearDown();
-  }
 
   // Verify that invoked method's return value has associated header.
   public void testMethodReturnHasHeader() throws IOException {
@@ -94,7 +87,7 @@ public class ImplementationImportCollectorTest extends GenerationTest {
 
   public void testEnhancedForMethodInvocation() throws IOException {
     addSourceFile("import java.util.*; class A { "
-        + "final Map<String,String> map; }", "A.java");
+        + "final Map<String,String> map = new HashMap<>(); }", "A.java");
     String translation = translateSourceFile(
         "import java.util.*; class B extends A { "
         + "void test() { for (String s : map.keySet()) {}}}", "B", "B.m");
@@ -152,7 +145,7 @@ public class ImplementationImportCollectorTest extends GenerationTest {
 
   // Verify that platform class packages aren't truncated with --no-package-directories.
   public void testPlatformImports() throws IOException {
-    Options.setOutputStyle(Options.OutputStyleOption.NONE);
+    options.getHeaderMap().setOutputStyle(HeaderMap.OutputStyleOption.NONE);
     String translation = translateSourceFile(
         "package foo.bar; import org.xml.sax.*; import org.xml.sax.helpers.*; "
         + "class Test { XMLReader test() { "
@@ -171,7 +164,7 @@ public class ImplementationImportCollectorTest extends GenerationTest {
 
   // Verify that platform class packages aren't changed with --preserve-full-paths.
   public void testPlatformImportsSourceDirs() throws IOException {
-    Options.setOutputStyle(Options.OutputStyleOption.SOURCE);
+    options.getHeaderMap().setOutputStyle(HeaderMap.OutputStyleOption.SOURCE);
     String translation = translateSourceFile(
         "package foo.bar; import org.xml.sax.*; import org.xml.sax.helpers.*; "
         + "class Test { XMLReader test() { "
@@ -209,5 +202,36 @@ public class ImplementationImportCollectorTest extends GenerationTest {
         "interface Test { java.util.Map foo(java.util.List l); }", "Test", "Test.m");
     assertNotInTranslation(translation, "Map.h");
     assertNotInTranslation(translation, "List.h");
+  }
+
+  public void testReturnExpressionTypeIncluded() throws IOException {
+    addSourceFile("interface I {}", "I.java");
+    addSourceFile("class J implements I {}", "J.java");
+    addSourceFile("class A { J j; }", "A.java");
+    String translation = translateSourceFile(
+        "class B extends A { I foo() { return j; } }", "B", "B.m");
+    assertTranslation(translation, "#include \"J.h\"");
+  }
+
+  // Issue #802.
+  public void testEnhancedForStatementExpressionTypeIncluded() throws IOException {
+    addSourceFile("class A { public java.util.ArrayList<String> list; }", "A.java");
+    String translation = translateSourceFile(
+        "class B extends A { void foo() { if (list != null) { for (String elem : list) { "
+        + "elem.hashCode(); } } } }", "B", "B.m");
+    assertTranslation(translation, "#include \"java/util/ArrayList.h\"");
+  }
+
+  // Issue #924.
+  public void testImportMultipleOuterClass() throws IOException {
+    createClassFile("a.b.c.Test", "package a.b.c; public class Test {} class Foo {}");
+    parser.addClasspathEntry(tempDir.getAbsolutePath());
+    String translation = translateSourceFile(
+        "package a.b.c; public class Bar { Object test() { return new Foo(); }}",
+        "a.b.c.Bar", "a/b/c/Bar.m");
+
+    // Verify that Test.h is imported, since that's what is generated from Test.java.
+    assertTranslation(translation, "#include \"a/b/c/Test.h\"");
+    assertNotInTranslation(translation, "#include \"a/b/c/Foo.h\"");
   }
 }

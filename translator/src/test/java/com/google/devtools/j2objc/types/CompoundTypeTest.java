@@ -15,20 +15,14 @@
 package com.google.devtools.j2objc.types;
 
 import com.google.devtools.j2objc.GenerationTest;
-import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
 import com.google.devtools.j2objc.ast.BodyDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.MethodDeclaration;
 import com.google.devtools.j2objc.ast.ReturnStatement;
-import com.google.devtools.j2objc.util.BindingUtil;
-import com.google.devtools.j2objc.util.SourceVersion;
+import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.TypeUtil;
-
-import org.eclipse.jdt.core.dom.ITypeBinding;
-
 import java.io.IOException;
-
 import javax.lang.model.type.TypeMirror;
 
 /**
@@ -38,10 +32,8 @@ import javax.lang.model.type.TypeMirror;
  */
 public class CompoundTypeTest extends GenerationTest {
 
-  // Test BindingUtil.isIntersectionType(ITypeBinding).
+  // Test TypeUtil.isIntersection(TypeMirror).
   public void testIsCompound() throws Exception {
-    Options.setSourceVersion(SourceVersion.JAVA_8);
-    createParser();
     String source = "interface Test<T> extends java.util.Comparator<T> {"
         + "  default Test<T> thenTesting(Test<? super T> other) { "
         + "    return (Test<T> & java.io.Serializable) (c1, c2) -> { "
@@ -53,10 +45,10 @@ public class CompoundTypeTest extends GenerationTest {
     for (BodyDeclaration body : decl.getBodyDeclarations()) {
       if (body instanceof MethodDeclaration) {
         MethodDeclaration method = (MethodDeclaration) body;
-        if (method.getName().getIdentifier().equals("thenTesting")) {
+        if (ElementUtil.getName(method.getExecutableElement()).equals("thenTesting")) {
           // Verify a normal type isn't marked as compound.
-          ITypeBinding binding = method.getReturnType().getTypeBinding();
-          assertFalse(BindingUtil.isIntersectionType(binding));
+          TypeMirror returnType = method.getReturnTypeMirror();
+          assertFalse(TypeUtil.isIntersection(returnType));
           // The method's return type isn't compound, but the cast expression in
           // its return statement is.
           ReturnStatement stmt = (ReturnStatement) method.getBody().getStatements().get(0);
@@ -68,10 +60,8 @@ public class CompoundTypeTest extends GenerationTest {
     assertEquals(1, methodsFound);
   }
 
-  // Test NameTable.getFullName(ITypeBinding).
+  // Test NameTable.getObjCType(TypeMirror).
   public void testCompoundTypeFullName() throws IOException {
-    Options.setSourceVersion(SourceVersion.JAVA_8);
-    createParser();
     String source = "package foo.bar; interface Test<T> extends java.util.Comparator<T> {"
         + "  default Test<T> thenTesting(Test<? super T> other) { "
         + "    return (Test<T> & java.io.Serializable) (c1, c2) -> { "
@@ -82,7 +72,7 @@ public class CompoundTypeTest extends GenerationTest {
     for (BodyDeclaration body : decl.getBodyDeclarations()) {
       if (body instanceof MethodDeclaration) {
         MethodDeclaration method = (MethodDeclaration) body;
-        if (method.getName().getIdentifier().equals("thenTesting")) {
+        if (ElementUtil.getName(method.getExecutableElement()).equals("thenTesting")) {
           // The method's return type isn't compound, but the cast expression in
           // its return statement is.
           ReturnStatement stmt = (ReturnStatement) method.getBody().getStatements().get(0);
@@ -98,8 +88,6 @@ public class CompoundTypeTest extends GenerationTest {
 
   // Verify that an include for ".h" isn't generated with a compound type.
   public void testCompoundTypeImport() throws IOException {
-    Options.setSourceVersion(SourceVersion.JAVA_8);
-    createParser();
     String source = "interface Test<T> extends java.util.Comparator<T> {"
         + "  default Test<T> thenTesting(Test<? super T> other) { "
         + "    return (Test<T> & java.io.Serializable) (c1, c2) -> { "

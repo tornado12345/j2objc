@@ -24,53 +24,41 @@
 #import "java/lang/AbstractStringBuilder.h"
 #import "java/lang/AssertionError.h"
 #import "java/lang/ClassCastException.h"
+#import "java/lang/Iterable.h"
 #import "java/lang/NullPointerException.h"
+#import "java/lang/Throwable.h"
 #import "java/util/logging/Level.h"
 #import "java/util/logging/Logger.h"
-#import "java_lang_IntegralToString.h"
-#import "java_lang_RealToString.h"
 #import "objc/runtime.h"
 
-void JreThrowNullPointerException() {
-  @throw AUTORELEASE([[JavaLangNullPointerException alloc] init]);
+id JreThrowNullPointerException() {
+  @throw create_JavaLangNullPointerException_init(); // NOLINT
 }
 
-void JreThrowClassCastException() {
-  @throw AUTORELEASE([[JavaLangClassCastException alloc] init]);
+void JreThrowClassCastException(id obj, Class cls) {
+  @throw create_JavaLangClassCastException_initWithNSString_(  // NOLINT
+      [NSString stringWithFormat:@"Cannot cast object of type %@ to %@",
+          [[obj java_getClass] getName], NSStringFromClass(cls)]);
+}
+
+void JreThrowClassCastExceptionWithIOSClass(id obj, IOSClass *cls) {
+  @throw create_JavaLangClassCastException_initWithNSString_(  // NOLINT
+      [NSString stringWithFormat:@"Cannot cast object of type %@ to %@",
+          [[obj java_getClass] getName], [cls getName]]);
 }
 
 void JreThrowAssertionError(id __unsafe_unretained msg) {
-  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:[msg description]]);
+  @throw AUTORELEASE([[JavaLangAssertionError alloc] initWithId:[msg description]]);  // NOLINT
 }
-
-#if defined(J2OBJC_COUNT_NIL_CHK) && !defined(J2OBJC_DISABLE_NIL_CHECKS)
-static int j2objc_nil_chk_count = 0;
-
-void JrePrintNilChkCount() {
-  printf("nil_chk count: %d\n", j2objc_nil_chk_count);
-}
-
-void JrePrintNilChkCountAtExit() {
-  atexit(JrePrintNilChkCount);
-}
-
-id nil_chk(id __unsafe_unretained p) {
-  j2objc_nil_chk_count++;
-  if (__builtin_expect(!p, 0)) {
-    JreThrowNullPointerException();
-  }
-  return p;
-}
-#endif
 
 void JreFinalize(id self) {
   @try {
     [self java_finalize];
-  } @catch (NSException *e) {
+  } @catch (JavaLangThrowable *e) {
     [JavaUtilLoggingLogger_getLoggerWithNSString_([[self java_getClass] getName])
         logWithJavaUtilLoggingLevel:JavaUtilLoggingLevel_get_WARNING()
                        withNSString:@"Uncaught exception in finalizer"
-                    withNSException:e];
+              withJavaLangThrowable:e];
   }
 }
 
@@ -86,6 +74,7 @@ id JreStrongAssignAndConsume(__strong id *pIvar, NS_RELEASES_ARGUMENT id value) 
 // locks for atomic access is consistent with how Apple implements atomic
 // property accessors, and the hashing used here is inspired by Apple's
 // implementation:
+// NOLINTNEXTLINE
 // http://www.opensource.apple.com/source/objc4/objc4-532.2/runtime/Accessors.subproj/objc-accessors.mm
 // Spin locks are unsafe to use on iOS because of the potential for priority
 // inversion so we use pthread_mutex.
@@ -117,23 +106,15 @@ id JreAssignVolatileId(volatile_id *pVar, id value) {
   return value;
 }
 
-static inline id JreVolatileStrongAssignInner(
-    volatile_id *pIvar, NS_RELEASES_ARGUMENT id value) {
+id JreVolatileStrongAssign(volatile_id *pIvar, id value) {
   volatile_lock_t lock = VOLATILE_GETLOCK(pIvar);
+  [value retain];
   VOLATILE_LOCK(lock);
   id oldValue = *(id *)pIvar;
   *(id *)pIvar = value;
   VOLATILE_UNLOCK(lock);
   [oldValue autorelease];
   return value;
-}
-
-id JreVolatileStrongAssign(volatile_id *pIvar, id value) {
-  return JreVolatileStrongAssignInner(pIvar, [value retain]);
-}
-
-id JreVolatileStrongAssignAndConsume(volatile_id *pIvar, NS_RELEASES_ARGUMENT id value) {
-  return JreVolatileStrongAssignInner(pIvar, value);
 }
 
 jboolean JreCompareAndSwapVolatileStrongId(volatile_id *pVar, id expected, id newValue) {
@@ -188,7 +169,7 @@ void JreCloneVolatileStrong(volatile_id *pVar, volatile_id *pOther) {
 
 id JreRetainedWithAssign(id parent, __strong id *pIvar, id value) {
   if (*pIvar) {
-    JreRetainedWithCheckPreviousValue(parent, *pIvar);
+    JreRetainedWithHandlePreviousValue(parent, *pIvar);
     [*pIvar autorelease];
   }
   // This retain makes sure that the child object has a retain count of at
@@ -209,7 +190,7 @@ id JreVolatileRetainedWithAssign(id parent, volatile_id *pIvar, id value) {
   *(id *)pIvar = value;
   VOLATILE_UNLOCK(lock);
   if (oldValue) {
-    JreRetainedWithCheckPreviousValue(parent, oldValue);
+    JreRetainedWithHandlePreviousValue(parent, oldValue);
     [oldValue autorelease];
   }
   return value;
@@ -227,31 +208,6 @@ void JreVolatileRetainedWithRelease(id parent, volatile_id *pVar) {
   // is unnecessary.
   [*(id *)pVar release];
 }
-
-// empty implementation base class for lambdas
-@implementation LambdaBase
-@end
-
-Class CreatePossiblyCapturingClass(
-    const char *lambdaName, jint numProtocols, Protocol *protocols[],
-    jint numMethods, SEL selectors[], IMP impls[], const char *signatures[]) {
-  Class cls = objc_allocateClassPair([LambdaBase class], lambdaName, 0);
-  for (jint i = 0; i < numProtocols; i++) {
-    class_addProtocol(cls, protocols[i]);
-  }
-  for (jint i = 0; i < numMethods; i++) {
-    class_addMethod(cls, selectors[i], impls[i], signatures[i]);
-  }
-  objc_registerClassPair(cls);
-  return cls;
-};
-
-id CreateNonCapturing(
-    const char *lambdaName, jint numProtocols, Protocol *protocols[],
-    jint numMethods, SEL selectors[], IMP impls[], const char *signatures[]) {
-  return NSAllocateObject(CreatePossiblyCapturingClass(lambdaName, numProtocols,
-      protocols, numMethods, selectors, impls, signatures), 0, nil);
-};
 
 jint JreIndexOfStr(NSString *str, NSString **values, jint size) {
   for (int i = 0; i < size; i++) {
@@ -315,9 +271,8 @@ static jint ComputeCapacity(const char *types, va_list va, NSString **objDescrip
         break;
       case '@':
         {
-          id obj = va_arg(va, id);
-          if (obj) {
-            NSString *description = [obj description];
+          NSString *description = [va_arg(va, id) description];
+          if (description) {
             *(objDescriptions++) = description;
             capacity += CFStringGetLength((CFStringRef)description);
           } else {
@@ -340,18 +295,18 @@ static void AppendArgs(
         JreStringBuilder_appendChar(sb, (jchar)va_arg(va, jint));
         break;
       case 'D':
-        RealToString_appendDouble(sb, va_arg(va, jdouble));
+        JreStringBuilder_appendDouble(sb, va_arg(va, jdouble));
         break;
       case 'F':
-        RealToString_appendFloat(sb, (jfloat)va_arg(va, jdouble));
+        JreStringBuilder_appendFloat(sb, (jfloat)va_arg(va, jdouble));
         break;
       case 'B':
       case 'I':
       case 'S':
-        IntegralToString_convertInt(sb, va_arg(va, jint));
+        JreStringBuilder_appendInt(sb, va_arg(va, jint));
         break;
       case 'J':
-        IntegralToString_convertLong(sb, va_arg(va, jlong));
+        JreStringBuilder_appendLong(sb, va_arg(va, jlong));
         break;
       case 'Z':
         JreStringBuilder_appendString(sb, (jboolean)va_arg(va, jint) ? @"true" : @"false");
@@ -450,4 +405,41 @@ id JreStrAppendArray(JreArrayRef lhs, const char *types, ...) {
 
 FOUNDATION_EXPORT void JreRelease(id obj) {
   [obj release];
+}
+
+FOUNDATION_EXPORT NSString *JreEnumConstantName(IOSClass *enumClass, jint ordinal) {
+  const J2ObjcClassInfo *metadata = [enumClass getMetadata];
+  if (metadata) {
+    return [NSString stringWithUTF8String:metadata->fields[ordinal].name];
+  } else {
+    return [NSString stringWithFormat:@"%@_%d", NSStringFromClass(enumClass.objcClass), ordinal];
+  }
+}
+
+NSUInteger JreDefaultFastEnumeration(
+    __unsafe_unretained id<JavaLangIterable> obj, NSFastEnumerationState *state,
+    __unsafe_unretained id *stackbuf) {
+  SEL hasNextSel = sel_registerName("hasNext");
+  SEL nextSel = sel_registerName("next");
+  __unsafe_unretained id iter = (ARCBRIDGE id) (void *) state->extra[0];
+  if (!iter) {
+    static unsigned long no_mutation = 1;
+    state->mutationsPtr = &no_mutation;
+    // The for/in loop could break early so we have no guarantee of being able
+    // to release the iterator. As long as the current autorelease pool is not
+    // cleared within the loop, this should be fine.
+    iter = nil_chk([obj iterator]);
+    state->extra[0] = (unsigned long) iter;
+    state->extra[1] = (unsigned long) [iter methodForSelector:hasNextSel];
+    state->extra[2] = (unsigned long) [iter methodForSelector:nextSel];
+  }
+  jboolean (*hasNextImpl)(id, SEL) = (jboolean (*)(id, SEL)) state->extra[1];
+  id (*nextImpl)(id, SEL) = (id (*)(id, SEL)) state->extra[2];
+  NSUInteger objCount = 0;
+  state->itemsPtr = stackbuf;
+  if (hasNextImpl(iter, hasNextSel)) {
+    *stackbuf++ = nextImpl(iter, nextSel);
+    objCount++;
+  }
+  return objCount;
 }

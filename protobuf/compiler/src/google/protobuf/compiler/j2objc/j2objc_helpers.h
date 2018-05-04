@@ -46,10 +46,21 @@ namespace j2objc {
 
 string SafeName(const string& name);
 
+string UnderscoresToCamelCase(const string& input, bool cap_next_letter);
+
 // Converts the field's name to camel-case, e.g. "foo_bar_baz" becomes
 // "fooBarBaz" or "FooBarBaz", respectively.
 string UnderscoresToCamelCase(const FieldDescriptor* field);
 string UnderscoresToCapitalizedCamelCase(const FieldDescriptor* field);
+
+inline bool IsMapEntry(const Descriptor* descriptor) {
+  return descriptor->options().map_entry();
+}
+
+inline bool IsMapField(const FieldDescriptor* descriptor) {
+  const Descriptor* message_type = descriptor->message_type();
+  return message_type != NULL ? IsMapEntry(message_type) : false;
+}
 
 // Returns the file's base name.
 string FileBaseName(const FileDescriptor* file);
@@ -89,7 +100,7 @@ string GetHeader(const FileDescriptor *descriptor);
 string GetHeader(const Descriptor *descriptor);
 string GetHeader(const EnumDescriptor *descriptor);
 
-string JoinFlags(const vector<string> &flags);
+string JoinFlags(const std::vector<string> &flags);
 string GetFieldFlags(const FieldDescriptor *field);
 
 enum JavaType {
@@ -109,7 +120,6 @@ JavaType GetJavaType(const FieldDescriptor* field);
 string DefaultValue(const FieldDescriptor *field);
 string GetFieldTypeEnumValue(const FieldDescriptor *descriptor);
 string GetDefaultValueTypeName(const FieldDescriptor *descriptor);
-string GetFieldDataClassName(const FieldDescriptor *descriptor);
 string GetFieldOptionsData(const FieldDescriptor *descriptor);
 
 void ParsePrefixFile(string prefix_file);

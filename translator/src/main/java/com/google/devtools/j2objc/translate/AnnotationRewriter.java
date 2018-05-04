@@ -38,6 +38,7 @@ import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.devtools.j2objc.util.UnicodeUtils;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import javax.lang.model.element.AnnotationValue;
@@ -71,8 +72,10 @@ public class AnnotationRewriter extends UnitTreeVisitor {
     addMemberProperties(node, members, fieldElements);
     addDefaultAccessors(node, members);
     bodyDecls.add(createAnnotationTypeMethod(type));
-    bodyDecls.add(createDescriptionMethod(type));
+    bodyDecls.add(createDescriptionMethod(type, members, fieldElements));
     addConstructor(node, fieldElements);
+    addEqualsMethod(node);
+    addHashCodeMethod(node);
   }
 
   // Create an instance field for each member.
@@ -175,24 +178,74 @@ public class AnnotationRewriter extends UnitTreeVisitor {
 
   private MethodDeclaration createAnnotationTypeMethod(TypeElement type) {
     ExecutableElement annotationTypeElement = GeneratedExecutableElement.newMethodWithSelector(
-        "annotationType", typeEnv.resolveJavaTypeMirror("java.lang.Class"), type);
+        "annotationType", typeUtil.getJavaClass().asType(), type);
     MethodDeclaration annotationTypeMethod = new MethodDeclaration(annotationTypeElement);
     annotationTypeMethod.setHasDeclaration(false);
     Block annotationTypeBody = new Block();
     annotationTypeMethod.setBody(annotationTypeBody);
-    annotationTypeBody.addStatement(new ReturnStatement(new TypeLiteral(type.asType(), typeEnv)));
+    annotationTypeBody.addStatement(new ReturnStatement(new TypeLiteral(type.asType(), typeUtil)));
     return annotationTypeMethod;
   }
 
-  private MethodDeclaration createDescriptionMethod(TypeElement type) {
+  private MethodDeclaration createDescriptionMethod(TypeElement type,
+      List<AnnotationTypeMemberDeclaration> members,
+      Map<ExecutableElement, VariableElement> fieldElements) {
     ExecutableElement descriptionElement = GeneratedExecutableElement.newMethodWithSelector(
-        "description", typeEnv.resolveJavaTypeMirror("java.lang.String"), type);
+        "description", typeUtil.getJavaString().asType(), type);
     MethodDeclaration descriptionMethod = new MethodDeclaration(descriptionElement);
     descriptionMethod.setHasDeclaration(false);
     Block descriptionBody = new Block();
     descriptionMethod.setBody(descriptionBody);
-    descriptionBody.addStatement(new ReturnStatement(
-        new StringLiteral("@" + elementUtil.getBinaryName(type) + "()", typeEnv)));
+    StringBuilder description = new StringBuilder();
+
+    StringBuilder fields = new StringBuilder();
+    if (!members.isEmpty()) {
+      description.append("@\"@" + elementUtil.getBinaryName(type) + "(");
+      Iterator<AnnotationTypeMemberDeclaration> iter = members.iterator();
+      while (iter.hasNext()) {
+        AnnotationTypeMemberDeclaration member = iter.next();
+        ExecutableElement memberElement = member.getExecutableElement();
+        String propName = NameTable.getAnnotationPropertyName(memberElement);
+        String fieldName = nameTable.getVariableShortName(fieldElements.get(memberElement));
+
+        description.append(
+            propName + "=%" + TypeUtil.getObjcFormatSpecifier(memberElement.getReturnType()));
+        fields.append(fieldName);
+        if (iter.hasNext()) {
+          description.append(", ");
+          fields.append(", ");
+        }
+      }
+      description.append(")\", " + fields);
+      descriptionBody.addStatement(
+          new NativeStatement("return [NSString stringWithFormat:" + description + "];"));
+    } else {
+      descriptionBody.addStatement(new ReturnStatement(
+          new StringLiteral("@" + elementUtil.getBinaryName(type) + "()", typeUtil)));
+    }
     return descriptionMethod;
+  }
+
+  private void addEqualsMethod(AnnotationTypeDeclaration node) {
+    TypeElement typeElement = node.getTypeElement();
+    GeneratedExecutableElement equalsElement = GeneratedExecutableElement.newMethodWithSelector(
+        "isEqual:", typeUtil.getBoolean(), typeElement);
+    GeneratedVariableElement paramElement = GeneratedVariableElement.newParameter(
+        "obj", typeUtil.getJavaObject().asType(), equalsElement);
+    equalsElement.addParameter(paramElement);
+    NativeStatement stmt = new NativeStatement("return JreAnnotationEquals(self, obj);");
+    node.addBodyDeclaration(new MethodDeclaration(equalsElement)
+        .addParameter(new SingleVariableDeclaration(paramElement))
+        .setBody(new Block().addStatement(stmt))
+        .setModifiers(java.lang.reflect.Modifier.PUBLIC));
+  }
+
+  private void addHashCodeMethod(AnnotationTypeDeclaration node) {
+    GeneratedExecutableElement element = GeneratedExecutableElement.newMethodWithSelector(
+        "hash", typeUtil.getInt(), node.getTypeElement());
+    NativeStatement stmt = new NativeStatement("return JreAnnotationHashCode(self);");
+    node.addBodyDeclaration(new MethodDeclaration(element)
+        .setBody(new Block().addStatement(stmt))
+        .setModifiers(java.lang.reflect.Modifier.PUBLIC));
   }
 }
