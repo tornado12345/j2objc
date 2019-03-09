@@ -23,7 +23,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.j2objc.J2ObjC;
 import com.google.devtools.j2objc.Options;
-import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.types.NativeType;
 import com.google.devtools.j2objc.types.PointerType;
 import com.google.j2objc.annotations.ObjectiveCName;
@@ -36,6 +35,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import javax.lang.model.element.AnnotationMirror;
@@ -75,11 +75,7 @@ public class NameTable {
   // actually want the first parameter to be self. This is an internal name,
   // converted to self during generation.
   public static final String SELF_NAME = "$$self$$";
-
   public static final String ID_TYPE = "id";
-  // This is syntactic sugar for blocks. All block are typed as ids, but we add a block_type typedef
-  // for source clarity.
-  public static final String BLOCK_TYPE = "block_type";
 
   private static final Logger logger = Logger.getLogger(NameTable.class.getName());
 
@@ -92,6 +88,13 @@ public class NameTable {
    * variables. Loaded from a resource file.
    */
   private static final ImmutableSet<String> reservedNames = loadReservedNames();
+
+  // Regex pattern for fully-qualified Java class or package names.
+  private static final String JAVA_CLASS_NAME_REGEX
+      = "(\\p{javaJavaIdentifierStart}\\p{javaJavaIdentifierPart}*\\.)*"
+          + "\\p{javaJavaIdentifierStart}\\p{javaJavaIdentifierPart}*";
+  private static final Pattern JAVA_CLASS_NAME_PATTERN = Pattern.compile(JAVA_CLASS_NAME_REGEX);
+
 
   private static ImmutableSet<String> loadReservedNames() {
     try (InputStream stream = J2ObjC.class.getResourceAsStream(RESERVED_NAMES_FILE);
@@ -121,7 +124,7 @@ public class NameTable {
    * "public boolean isEqual(Object o)" would be translated as
    * "- (BOOL)isEqualWithObject:(NSObject *)o", not NSObject's "isEqual:".
    */
-  public static final ImmutableSet<String> nsObjectMessages = ImmutableSet.of(
+  private static final ImmutableSet<String> nsObjectMessages = ImmutableSet.of(
       "alloc", "attributeKeys", "autoContentAccessingProxy", "autorelease",
       "classCode", "classDescription", "classForArchiver",
       "classForKeyedArchiver", "classFallbacksForKeyedArchiver",
@@ -291,6 +294,7 @@ public class NameTable {
       List<? extends TypeMirror> bounds = typeUtil.getUpperBounds(type);
       TypeElement elem = bounds.isEmpty()
           ? TypeUtil.NS_OBJECT : typeUtil.getObjcClass(bounds.get(0));
+      assert elem != null;
       if (arrayDimensions == 0 && elem.equals(TypeUtil.NS_OBJECT)) {
         // Special case: Non-array object types become "id".
         return ID_TYPE;
@@ -310,7 +314,7 @@ public class NameTable {
     return "with" + capitalize(getParameterTypeKeyword(type));
   }
 
-  private static final Pattern SELECTOR_VALIDATOR = Pattern.compile("\\w+|(\\w+\\:)+");
+  private static final Pattern SELECTOR_VALIDATOR = Pattern.compile("\\w+|(\\w+:)+");
 
   private static void validateMethodSelector(String selector) {
     if (!SELECTOR_VALIDATOR.matcher(selector).matches()) {
@@ -318,7 +322,7 @@ public class NameTable {
     }
   }
 
-  public static String getMethodName(ExecutableElement method) {
+  private static String getMethodName(ExecutableElement method) {
     if (ElementUtil.isConstructor(method)) {
       return "init";
     }
@@ -408,27 +412,6 @@ public class NameTable {
    */
   public String getFullFunctionName(ExecutableElement method) {
     return getFullName(ElementUtil.getDeclaringClass(method)) + '_' + getFunctionName(method);
-  }
-
-  /**
-   * Increments and returns a generic argument, as needed by lambda wrapper blocks. Possible
-   * variable names range from 'a' to 'zz'. This only supports 676 arguments, but this more than the
-   * java limit of 255 / 254 parameters for static / non-static parameters, respectively.
-   */
-  public static char[] incrementVariable(char[] var) {
-    if (var == null) {
-      return new char[] { 'a' };
-    }
-    if (var[var.length - 1]++ == 'z') {
-      if (var.length == 1) {
-        var = new char[2];
-        var[0] = 'a';
-      } else {
-        var[0]++;
-      }
-      var[1] = 'a';
-    }
-    return var;
   }
 
   /**
@@ -665,12 +648,50 @@ public class NameTable {
     return reservedNames.contains(name) || nsObjectMessages.contains(name);
   }
 
-  public static String getMainTypeFullName(CompilationUnit unit) {
-    PackageElement pkgElement = unit.getPackage().getPackageElement();
-    return unit.getEnv().nameTable().getPrefix(pkgElement) + unit.getMainTypeName();
+  private String getPrefix(PackageElement packageElement) {
+    return prefixMap.getPrefix(packageElement);
   }
 
-  public String getPrefix(PackageElement packageElement) {
-    return prefixMap.getPrefix(packageElement);
+  /** Ignores the ObjectiveCName annotation. */
+  private String getDefaultObjectiveCName(TypeElement element) {
+    String binaryName = elementUtil.getBinaryName(element);
+    return camelCaseQualifiedName(binaryName).replace('$', '_');
+  }
+
+  public Optional<String> getNameMapping(TypeElement typeElement, String typeName) {
+    final String mappingFormat = "J2OBJC_NAME_MAPPING(%s, \"%s\", \"%s\")\n";
+    // No mapping is needed if the default Objective-C name was not modified.
+    if (typeName.equals(getDefaultObjectiveCName(typeElement))) {
+      return Optional.empty();
+    }
+
+    // Return a class mapping only if there is a explicit rename.
+    AnnotationMirror annotation = ElementUtil.getAnnotation(typeElement, ObjectiveCName.class);
+    String mappedName = classMappings.get(ElementUtil.getQualifiedName(typeElement));
+    if (annotation != null || mappedName != null) {
+      return Optional.of(
+          String.format(mappingFormat, typeName, elementUtil.getBinaryName(typeElement), typeName));
+    }
+
+    // Otherwise, there was a package rename. Because only one package mapping is needed per
+    // generation unit, it is safe to generate it together with a public class.
+    if (ElementUtil.isTopLevel(typeElement) && ElementUtil.isPublic(typeElement)) {
+      PackageElement packageElement = ElementUtil.getPackage(typeElement);
+      String packageName = packageElement.getQualifiedName().toString();
+      String mappedPackageName = getPrefix(packageElement);
+      return Optional.of(
+          String.format(mappingFormat, typeName, packageName, mappedPackageName));
+    }
+
+    return Optional.empty();
+  }
+
+  /**
+   * Verifies that a fully-qualified class name is lexically correct. This method does
+   * not check whether the class actually exists, however. It also will return true for
+   * valid package names, since they cannot be distinguished except by parsing context.
+   */
+  public static boolean isValidClassName(String className) {
+    return JAVA_CLASS_NAME_PATTERN.matcher(className).matches();
   }
 }

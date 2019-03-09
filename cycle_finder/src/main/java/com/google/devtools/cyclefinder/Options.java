@@ -21,6 +21,7 @@ import com.google.common.collect.Lists;
 import com.google.common.io.Files;
 import com.google.common.io.Resources;
 import com.google.devtools.j2objc.util.ErrorUtil;
+import com.google.devtools.j2objc.util.ExternalAnnotations;
 import com.google.devtools.j2objc.util.SourceVersion;
 import com.google.devtools.j2objc.util.Version;
 import java.io.BufferedReader;
@@ -62,6 +63,7 @@ class Options {
   private String fileEncoding = System.getProperty("file.encoding", "UTF-8");
   private boolean printReferenceGraph = false;
   private SourceVersion sourceVersion = SourceVersion.defaultVersion();
+  private final ExternalAnnotations externalAnnotations = new ExternalAnnotations();
 
   public List<String> getSourceFiles() {
     return sourceFiles;
@@ -138,6 +140,19 @@ class Options {
      printReferenceGraph = true;
   }
 
+  public ExternalAnnotations externalAnnotations() {
+    return externalAnnotations;
+  }
+
+  private void addExternalAnnotationFile(String file) throws IOException {
+    externalAnnotations.addExternalAnnotationFile(file);
+  }
+
+  @VisibleForTesting
+  public void addExternalAnnotationFileContents(String fileContents) throws IOException {
+    externalAnnotations.addExternalAnnotationFileContents(fileContents);
+  }
+
   public static void usage(String invalidUseMsg) {
     System.err.println("cycle_finder: " + invalidUseMsg);
     System.err.println(usageMessage);
@@ -204,11 +219,21 @@ class Options {
             ErrorUtil.warning("Java 9 source version is not supported, using Java 8.");
             options.sourceVersion = SourceVersion.JAVA_8;
           }
+          // TODO(tball): remove when Java 10 source is supported.
+          if (options.sourceVersion == SourceVersion.JAVA_10) {
+            ErrorUtil.warning("Java 10 source version is not supported, using Java 8.");
+            options.sourceVersion = SourceVersion.JAVA_8;
+          }
         } catch (IllegalArgumentException e) {
           usage("invalid source release: " + args[nArg]);
         }
       } else if (arg.equals("--print-reference-graph")) {
         options.printReferenceGraph = true;
+      } else if (arg.equals("-Xexternal-annotation-file")) {
+        if (++nArg == args.length) {
+          usage(arg + " requires an argument");
+        }
+        options.addExternalAnnotationFile(args[nArg]);
       } else if (arg.equals("-version")) {
         version();
       } else if (arg.startsWith("-h") || arg.equals("--help")) {

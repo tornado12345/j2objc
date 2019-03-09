@@ -32,6 +32,7 @@
 #import "IOSProxyClass.h"
 #import "IOSReflection.h"
 #import "NSCopying+JavaCloneable.h"
+#import "NSDataInputStream.h"
 #import "NSNumber+JavaNumber.h"
 #import "NSObject+JavaObject.h"
 #import "NSString+JavaString.h"
@@ -54,8 +55,10 @@
 #import "java/lang/reflect/Method.h"
 #import "java/lang/reflect/Modifier.h"
 #import "java/lang/reflect/TypeVariable.h"
-#import "java/util/Enumeration.h"
+#import "java/util/ArrayList.h"
+#import "java/util/Iterator.h"
 #import "java/util/Properties.h"
+#import "java/util/Set.h"
 #import "libcore/reflect/AnnotatedElements.h"
 #import "libcore/reflect/GenericSignatureParser.h"
 #import "libcore/reflect/Types.h"
@@ -72,9 +75,25 @@
 
 J2OBJC_INITIALIZED_DEFN(IOSClass)
 
-@implementation IOSClass
+#define PREFIX_MAPPING_RESOURCE @"/prefixes.properties"
 
-static NSDictionary *IOSClass_mappedClasses;
+// Package to prefix mappings, initialized in FindRenamedPackagePrefix().
+static JavaUtilArrayList *prefixMapping;
+
+@interface PackagePrefixEntry : NSObject {
+  NSString *key_;
+  NSString *value_;
+}
+- (instancetype)initWithNSString:(NSString *)key withNSString:(NSString *)value;
+- (NSString *)key;
+- (NSString *)value;
+@end
+
+@interface PackagePrefixLoader : NSObject < JavaUtilProperties_KeyValueLoader >
+- (void)load__WithNSString:(NSString *)key withNSString:(NSString *)value;
+@end
+
+@implementation IOSClass
 
 // Primitive class instances.
 static IOSPrimitiveClass *IOSClass_byteClass;
@@ -91,11 +110,6 @@ static IOSPrimitiveClass *IOSClass_voidClass;
 static IOSClass *IOSClass_objectClass;
 
 static IOSObjectArray *IOSClass_emptyClassArray;
-
-#define PREFIX_MAPPING_RESOURCE @"/prefixes.properties"
-
-// Package to prefix mappings, initialized in FindRenamedPackagePrefix().
-static JavaUtilProperties *prefixMapping;
 
 - (Class)objcClass {
   return nil;
@@ -471,23 +485,27 @@ static NSString *FindRenamedPackagePrefix(NSString *package) {
     prefix = method_invoke(pkgInfoCls, prefixMethod);
   }
   if (!prefix) {
-    // Check whether package has a mapped prefix property.
+    // Initialize prefix mappings, if defined.
     static dispatch_once_t once;
     dispatch_once(&once, ^{
       JavaIoInputStream *prefixesResource =
           [IOSClass_objectClass getResourceAsStream:PREFIX_MAPPING_RESOURCE];
       if (prefixesResource) {
-        prefixMapping = [[JavaUtilProperties alloc] init];
-        [prefixMapping load__WithJavaIoInputStream:prefixesResource];
+        JreStrongAssignAndConsume(&prefixMapping, new_JavaUtilArrayList_init());
+        JavaUtilProperties_LineReader *lr =
+            create_JavaUtilProperties_LineReader_initWithJavaIoInputStream_(prefixesResource);
+        PackagePrefixLoader *loader = [[PackagePrefixLoader alloc] init];
+        [JavaUtilProperties loadLineReaderWithJavaUtilProperties_LineReader:lr
+                                      withJavaUtilProperties_KeyValueLoader:loader];
       }
     });
-    prefix = [prefixMapping getPropertyWithNSString:package];
   }
   if (!prefix && prefixMapping) {
     // Check each prefix mapping to see if it's a matching wildcard.
-    id<JavaUtilEnumeration> names = [prefixMapping propertyNames];
-    while ([names hasMoreElements]) {
-      NSString *key = (NSString *) [names nextElement];
+    id<JavaUtilIterator> names = [prefixMapping iterator];
+    while ([names hasNext]) {
+      PackagePrefixEntry *entry = (PackagePrefixEntry *)[names next];
+      NSString *key = [entry key];
       // Same translation as j2objc's PackagePrefixes.wildcardToRegex().
       NSString *regex;
       if ([key hasSuffix:@".*"]) {
@@ -500,7 +518,7 @@ static NSString *FindRenamedPackagePrefix(NSString *package) {
                   java_replace:@"\\*" withSequence:@".*"]];
       }
       if ([package java_matches:regex]) {
-        prefix = [prefixMapping getPropertyWithNSString:key];
+        prefix = [entry value];
         break;
       }
     }
@@ -519,9 +537,31 @@ static NSString *JavaToIosName(NSString *javaName) {
   return [javaName stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
 }
 
+// The __j2objc_aliases custom data segment is built by the linker (along with these start
+// and end section symbols) from structures defined by the J2OBJC_NAME_MAPPING macro.
+// This data defines mapping for Java names to the actual iOS names, and so is only
+// necessary when loading classes by name.
+static NSDictionary *FetchNameMappings() {
+  extern J2ObjcNameMapping start_alias_section __asm("section$start$__DATA$__j2objc_aliases");
+  extern J2ObjcNameMapping end_alias_section  __asm("section$end$__DATA$__j2objc_aliases");
+  NSUInteger nMappings = (NSUInteger)(&end_alias_section - &start_alias_section);
+  NSMutableDictionary *mappedNames = [[NSMutableDictionary alloc] initWithCapacity:nMappings];
+  for (long i = 0; i < nMappings; i++) {
+    J2ObjcNameMapping* mapping = (&start_alias_section) + i;
+    [mappedNames setObject:@(mapping->ios_name) forKey:@(mapping->java_name)];
+  }
+  return mappedNames;
+}
+
 static IOSClass *ClassForJavaName(NSString *name) {
+  static NSDictionary *mappedNames;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    mappedNames = FetchNameMappings();
+  });
+
   // First check if this is a mapped name.
-  NSString *mappedName = [IOSClass_mappedClasses objectForKey:name];
+  NSString *mappedName = [mappedNames objectForKey:name];
   if (mappedName) {
     return ClassForIosName(mappedName);
   }
@@ -535,7 +575,7 @@ static IOSClass *ClassForJavaName(NSString *name) {
       break;
     }
     NSString *prefix = [name substringToIndex:lastDollar];
-    NSString *mappedName = [IOSClass_mappedClasses objectForKey:prefix];
+    NSString *mappedName = [mappedNames objectForKey:prefix];
     if (mappedName) {
       NSString *suffix = JavaToIosName([name substringFromIndex:lastDollar]);
       return ClassForIosName([mappedName stringByAppendingString:suffix]);
@@ -549,17 +589,22 @@ static IOSClass *ClassForJavaName(NSString *name) {
     return ClassForIosName(JavaToIosName(name));
   }
   NSString *package = [name substringToIndex:lastDot];
-  NSString *suffix = JavaToIosName([name substringFromIndex:lastDot + 1]);
+  NSString *clazz = JavaToIosName([name substringFromIndex:lastDot + 1]);
   // First check if the class can be found with the default camel case package. This avoids the
   // expensive FindRenamedPackagePrefix if possible.
-  IOSClass *cls = ClassForIosName([CamelCasePackage(package) stringByAppendingString:suffix]);
+  IOSClass *cls = ClassForIosName([CamelCasePackage(package) stringByAppendingString:clazz]);
   if (cls) {
     return cls;
+  }
+  // Check if the package has a mapped name.
+  mappedName = [mappedNames objectForKey:package];
+  if (mappedName) {
+    return ClassForIosName([mappedName stringByAppendingString:clazz]);
   }
   // Check if the package has a renamed prefix.
   NSString *renamedPackage = FindRenamedPackagePrefix(package);
   if (renamedPackage) {
-    return ClassForIosName([renamedPackage stringByAppendingString:suffix]);
+    return ClassForIosName([renamedPackage stringByAppendingString:clazz]);
   }
   return nil;
 }
@@ -612,6 +657,7 @@ static IOSClass *IOSClass_ArrayClassForName(NSString *name, NSUInteger index) {
 }
 
 IOSClass *IOSClass_forName_(NSString *className) {
+  IOSClass_initialize();
   (void)nil_chk(className);
   IOSClass *iosClass = nil;
   if ([className length] > 0) {
@@ -634,6 +680,7 @@ IOSClass *IOSClass_forName_(NSString *className) {
 
 IOSClass *IOSClass_forName_initialize_classLoader_(
     NSString *className, jboolean load, JavaLangClassLoader *loader) {
+  IOSClass_initialize();
   return IOSClass_forName_(className);
 }
 
@@ -1176,15 +1223,6 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
 
 + (void)initialize {
   if (self == [IOSClass class]) {
-    // Explicitly mapped classes are defined in Types.initializeTypeMap().
-    // If types are added to that method (it's rare) they need to be added here.
-    IOSClass_mappedClasses = [[NSDictionary alloc] initWithObjectsAndKeys:
-         @"NSObject",    @"java.lang.Object",
-         @"IOSClass",    @"java.lang.Class",
-         @"NSNumber",    @"java.lang.Number",
-         @"NSString",    @"java.lang.String",
-         @"NSCopying",   @"java.lang.Cloneable", nil];
-
     IOSClass_byteClass = [[IOSPrimitiveClass alloc] initWithName:@"byte" type:@"B"];
     IOSClass_charClass = [[IOSPrimitiveClass alloc] initWithName:@"char" type:@"C"];
     IOSClass_doubleClass = [[IOSPrimitiveClass alloc] initWithName:@"double" type:@"D"];
@@ -1398,3 +1436,41 @@ IOSClass *IOSClass_arrayType(IOSClass *componentType, jint dimensions) {
 @end
 
 J2OBJC_CLASS_TYPE_LITERAL_SOURCE(IOSClass)
+
+J2OBJC_NAME_MAPPING(IOSClass, "java.lang.Class", "IOSClass")
+
+@implementation PackagePrefixEntry
+
+- (instancetype)initWithNSString:(NSString *)key
+                    withNSString:(NSString *)value {
+  if ((self = [super init])) {
+    key_ = [key retain];
+    value_ = [value retain];
+  }
+  return self;
+}
+
+- (NSString *)key {
+  return key_;
+}
+
+- (NSString *)value {
+  return value_;
+}
+
+- (void)dealloc {
+  [key_ release];
+  [value_ release];
+  [super dealloc];
+}
+
+@end
+
+@implementation PackagePrefixLoader
+
+- (void)load__WithNSString:(NSString *)key withNSString:(NSString *)value {
+  [nil_chk(prefixMapping) addWithId:[[PackagePrefixEntry alloc] initWithNSString:key
+                                                                    withNSString:value]];
+}
+
+@end

@@ -126,7 +126,8 @@ public class CycleFinder {
       String relativePath = qualifiedName.replace('.', File.separatorChar) + ".java";
       File strippedFile = new File(strippedDir, relativePath);
       Files.createParentDirs(strippedFile);
-      Files.write(parseResult.getSource(), strippedFile, Charset.forName(options.fileEncoding()));
+      Files.asCharSink(strippedFile, Charset.forName(options.fileEncoding()))
+          .write(parseResult.getSource());
       sourceFileNames.set(i, strippedFile.getPath());
     }
     return strippedDir;
@@ -136,7 +137,8 @@ public class CycleFinder {
     Parser parser = createParser();
     NameList whitelist =
         NameList.createFromFiles(options.getWhitelistFiles(), options.fileEncoding());
-    final GraphBuilder graphBuilder = new GraphBuilder(whitelist);
+    final GraphBuilder graphBuilder =
+        new GraphBuilder(whitelist, options.externalAnnotations());
 
     List<String> sourceFiles = options.getSourceFiles();
     File strippedDir = stripIncompatible(sourceFiles, parser);

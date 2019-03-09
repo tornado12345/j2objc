@@ -19,7 +19,13 @@ package com.google.devtools.j2objc.util;
  */
 public enum SourceVersion {
 
-  JAVA_9(9, "1.9"), JAVA_8(8, "1.8"), JAVA_7(7, "1.7"), JAVA_6(6, "1.6"), JAVA_5(5, "1.5");
+  JAVA_11(11, "11"),
+  JAVA_10(10, "10"),
+  JAVA_9(9, "1.9"),
+  JAVA_8(8, "1.8"),
+  JAVA_7(7, "1.7"),
+  JAVA_6(6, "1.6"),
+  JAVA_5(5, "1.5");
 
   private final int version;
   private final String flag;
@@ -54,14 +60,6 @@ public enum SourceVersion {
       }
     }
     throw new IllegalArgumentException("Unsupported version: " + majorVersion);
-  }
-
-  public static boolean java7Minimum(SourceVersion sourceVersion) {
-    return sourceVersion.version >= 7;
-  }
-
-  public static boolean java8Minimum(SourceVersion sourceVersion) {
-    return sourceVersion.version >= 8;
   }
 
   public static boolean java9Minimum(SourceVersion sourceVersion) {

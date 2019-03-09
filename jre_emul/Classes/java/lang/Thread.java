@@ -17,12 +17,15 @@
 
 package java.lang;
 
+import com.google.j2objc.annotations.ReflectionSupport;
 import com.google.j2objc.annotations.Weak;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import sun.nio.ch.Interruptible;
 
 /*-[
@@ -51,6 +54,7 @@ import sun.nio.ch.Interruptible;
  *
  * @author Tom Ball, Keith Stanger
  */
+@ReflectionSupport(value = ReflectionSupport.Level.FULL)
 public class Thread implements Runnable {
   private static final int NANOS_PER_MILLI = 1000000;
 
@@ -1070,8 +1074,9 @@ public class Thread implements Runnable {
   private static class SystemUncaughtExceptionHandler implements UncaughtExceptionHandler {
     @Override
     public synchronized void uncaughtException(Thread t, Throwable e) {
-      System.err.print("Exception in thread \"" + t.getName() + "\" ");
-      e.printStackTrace(System.err);
+      // Log the exception using the root logger (""), so it isn't accidentally filtered.
+      Logger.getLogger("").log(
+          Level.SEVERE, "Uncaught exception in thread \"" + t.getName() + "\"", e);
     }
   }
 

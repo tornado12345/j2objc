@@ -321,10 +321,6 @@ public class Functionizer extends UnitTreeVisitor {
     } else if (captureInfo.needsOuterParam(type)) {
       args.add(new ThisExpression(ElementUtil.getDeclaringClass(type).asType()));
     }
-    Expression superOuterArg = node.getSuperOuterArg();
-    if (superOuterArg != null) {
-      args.add(TreeUtil.remove(superOuterArg));
-    }
     TreeUtil.moveList(node.getCaptureArgs(), args);
     TreeUtil.moveList(node.getArguments(), args);
     node.replaceWith(invocation);
@@ -437,7 +433,7 @@ public class Functionizer extends UnitTreeVisitor {
 
     function.setBody(TreeUtil.remove(method.getBody()));
 
-    if (ElementUtil.isStatic(elem)) {
+    if (ElementUtil.isStatic(elem) || ElementUtil.isDefault(elem)) {
       // Add class initialization invocation, since this may be the first use of this class.
       String initName = UnicodeUtils.format("%s_initialize", nameTable.getFullName(declaringClass));
       TypeMirror voidType = typeUtil.getVoid();

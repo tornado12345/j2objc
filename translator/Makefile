@@ -35,7 +35,11 @@ SOURCEPATH = $(CWD):$(JAVA_SOURCE_DIR)
 BASE_PACKAGE = com/google/devtools/j2objc
 
 DIST_DEPS = $(JSR305_JAR) j2objc_annotations.jar
-INTERNAL_DEPS = $(GUAVA_JAR) $(JSR305_JAR) $(JAVAC_JAR) $(PROCYON_JARS)
+INTERNAL_DEPS = $(GUAVA_JAR) $(JSR305_JAR) $(PROCYON_JARS) $(SCENELIB_JAR) \
+    $(PLUME_UTIL_JAR)
+ifdef JAVA_8
+INTERNAL_DEPS += $(JAVAC_JAR)
+endif
 JAR_DEPS_DIST = $(DIST_DEPS:%=$(DIST_JAR_DIR)/%) $(INTERNAL_DEPS:%=$(JAVA_DEPS_JAR_DIR)/%)
 JAR_DEPS_PATH = $(subst $(eval) ,:,$(strip $(JAR_DEPS_DIST)))
 JUNIT_JAR_DIST = $(DIST_JAR_DIR)/$(JUNIT_JAR)
@@ -180,6 +184,7 @@ JAVA_SOURCES = \
 	gen/ObjectiveCImplementationGenerator.java \
 	gen/ObjectiveCSegmentedHeaderGenerator.java \
 	gen/ObjectiveCSourceFileGenerator.java \
+	gen/PropertyGenerator.java \
 	gen/SignatureGenerator.java \
 	gen/SourceBuilder.java \
 	gen/StatementGenerator.java \
@@ -211,6 +216,7 @@ JAVA_SOURCES = \
 	translate/DestructorGenerator.java \
 	translate/EnhancedForRewriter.java \
 	translate/EnumRewriter.java \
+	translate/ExternalAnnotationInjector.java \
 	translate/Functionizer.java \
 	translate/GwtConverter.java \
 	translate/InitializationNormalizer.java \
@@ -228,6 +234,7 @@ JAVA_SOURCES = \
 	translate/PackageInfoRewriter.java \
 	translate/PrivateDeclarationResolver.java \
 	translate/Rewriter.java \
+	translate/SerializationStripper.java \
 	translate/StaticVarRewriter.java \
 	translate/SuperMethodInvocationRewriter.java \
 	translate/SwitchRewriter.java \
@@ -254,6 +261,7 @@ JAVA_SOURCES = \
 	util/CodeReferenceMap.java \
 	util/ElementUtil.java \
 	util/ErrorUtil.java \
+	util/ExternalAnnotations.java \
 	util/FileUtil.java \
 	util/HeaderMap.java \
 	util/Mappings.java \
@@ -281,6 +289,7 @@ RESOURCE_FILES = $(RESOURCES:%=$(CLASS_DIR)/$(BASE_PACKAGE)/%)
 TEST_RESOURCES = \
   com/google/devtools/j2objc/mappings.j2objc \
   com/google/devtools/j2objc/testMappings.j2objc \
+  com/google/devtools/j2objc/annotations/ExplicitProcessor.jar \
   com/google/devtools/j2objc/annotations/Processor.jar \
   com/google/devtools/j2objc/util/example.jar \
   com/google/devtools/j2objc/util/hello.aar \
@@ -290,7 +299,7 @@ TEST_RESOURCE_FILES = $(TEST_RESOURCES:%=$(TEST_DIR)/%)
 # Files in dependent jars that aren't needed in combined jar.
 UNUSED_JAR_CONTENTS = \
   $(CLASS_DIR)/[A-Z]* \
-  $(CLASS_DIR)/[ahps]* \
+  $(CLASS_DIR)/[ahp]* \
   $(CLASS_DIR)/about_files \
   $(CLASS_DIR)/ant_tasks \
   $(CLASS_DIR)/compiler* \
@@ -308,13 +317,29 @@ default: $(J2OBJC_JAR)
 $(J2OBJC_JAR): $(MANIFEST) $(RESOURCE_FILES) $(JAVA_SOURCES_FULL) \
   | $(BUILD_DIR) java_deps_dist annotations_dist
 	@echo building j2objc jar
+ifdef JAVA_8
 	@$(JAVAC) -Xlint:unchecked -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) \
 	    -d $(CLASS_DIR) -encoding UTF-8 -source 1.8 -target 1.8 -nowarn \
 	    $(JAVA_SOURCES_FULL)
+else
+	@$(JAVAC) -Xlint:unchecked -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) \
+	    -d $(CLASS_DIR) -encoding UTF-8 -nowarn \
+	    --add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED \
+	    --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED \
+	    --add-exports jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED \
+	    --add-exports jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED \
+	    --add-exports jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED \
+	    $(JAVA_SOURCES_FULL)
+endif
 	@for lib in $(JAR_DEPS_DIST); do unzip -oq $$lib -d $(CLASS_DIR); done
 	@$(PRUNE_CMD)
+ifdef JAVA_8
 	@jar cfm $@-combined $(MANIFEST) -C $(CLASS_DIR) .
 	@$(JAVA) -jar $(JAVA_DEPS_JAR_DIR)/$(JARJAR_JAR) process jarjar.rules $@-combined $@
+else
+	# TODO(user): update jarjar to work with Java 11 bytecode.
+	@jar cfm $@ $(MANIFEST) -C $(CLASS_DIR) .
+endif
 
 # Format manifest classpath with each jar on a separate line, to avoid
 # maximum line length of 72 bytes in UTF-8 encoding.
@@ -347,9 +372,17 @@ clean:
 	@rm -rf $(BUILD_DIR) $(J2OBJC_JAR_DIST) $(J2OBJC_SH_DIST)
 
 test: compile-tests copy-test-resources
+ifdef JAVA_8
 	$(JAVA) -classpath $(TEST_CLASSPATH) -Xss4m -XX:+UseParallelGC \
 	    -Xbootclasspath/a:$(TEST_BOOT_CLASSPATH) \
 	    -ea junit.textui.TestRunner com.google.devtools.j2objc.SmallTests
+else
+	# TODO(user): move bootclasspath to --system=bootclasspath
+	# once jre_emul.jar is modularized.
+	$(JAVA) -classpath $(TEST_CLASSPATH):$(TEST_BOOT_CLASSPATH) \
+	    -Xss4m -XX:+UseParallelGC \
+	    -ea junit.textui.TestRunner com.google.devtools.j2objc.SmallTests
+endif
 
 compile-tests: $(J2OBJC_JAR)
 	@mkdir -p $(TEST_DIR)

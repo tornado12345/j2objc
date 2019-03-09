@@ -16,6 +16,8 @@
 
 package com.google.devtools.j2objc;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.Lists;
@@ -44,10 +46,10 @@ import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.Parser;
 import com.google.devtools.j2objc.util.TimeTracker;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.StringReader;
@@ -59,6 +61,7 @@ import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -170,7 +173,8 @@ public class GenerationTest extends TestCase {
    */
   protected CompilationUnit translateType(String typeName, String source) {
     CompilationUnit newUnit = compileType(typeName, source);
-    TranslationProcessor.applyMutations(newUnit, deadCodeMap, TimeTracker.noop());
+    TranslationProcessor.applyMutations(
+        newUnit, deadCodeMap, options.externalAnnotations(), TimeTracker.noop());
     return newUnit;
   }
 
@@ -256,7 +260,7 @@ public class GenerationTest extends TestCase {
     String path = typeNameToSource(typeName);
     File srcFile = new File(tempDir, path);
     srcFile.getParentFile().mkdirs();
-    try (FileWriter fw = new FileWriter(srcFile)) {
+    try (BufferedWriter fw = Files.newWriter(srcFile, UTF_8)) {
       fw.write(source);
     }
 
@@ -445,29 +449,54 @@ public class GenerationTest extends TestCase {
   }
 
   /**
-   * Compiles Java source, as contained in a source file, and compares the parsed compilation units
-   * generated from the source and class files, while ignoring method bodies.
+   * Compiles Java source, as contained in a source file, and compares the generated Objective C
+   * from the source and class files.
    *
    * @param type the public type being declared
    * @param source the source code
    */
-  protected void assertEqualSignatureSrcClassfile(String type, String source) throws IOException {
-    CompilationUnit srcUnit = compileType(type, source);
-    CompilationUnit classfileUnit = compileAsClassFile(type, source);
-    assertEqualSignatures(srcUnit, classfileUnit);
+  protected void assertEqualSrcClassfile(String type, String source) throws IOException {
+    options.setEmitSourceHeaders(false);
+    String fileRoot = type.replace('.', '/');
+    CompilationUnit srcUnit = translateType(type, source);
+    String srcHeader = generateFromUnit(srcUnit, fileRoot + ".h");
+    String srcImpl = getTranslatedFile(fileRoot + ".m");
+
+    Options.OutputLanguageOption language = options.getLanguage();
+    options.setOutputLanguage(Options.OutputLanguageOption.TEST_OBJECTIVE_C);
+    CompilationUnit classfileUnit = compileAsClassFile(fileRoot, source);
+    TranslationProcessor.applyMutations(
+        classfileUnit, deadCodeMap, options.externalAnnotations(), TimeTracker.noop());
+    String clsHeader = generateFromUnit(classfileUnit, fileRoot + ".h2");
+    String clsImpl = getTranslatedFile(fileRoot + ".m2");
+    options.setOutputLanguage(language);
+    if (!srcHeader.equals(clsHeader)) {
+      fail("source and classfile headers differ:\n" + diff(fileRoot + ".h", fileRoot + ".h2"));
+    }
+    if (!srcImpl.equals(clsImpl)) {
+      fail("source and classfile impls differ:\n" + diff(fileRoot + ".m", fileRoot + ".m2"));
+    }
   }
 
   /**
-   * Compiles Java source, as contained in a source file, and compares the parsed compilation units
-   * generated from the source and class files.
-   *
-   * @param type the public type being declared
-   * @param source the source code
+   * Invoke diff on two generated files and return its report.
    */
-  protected void assertEqualASTSrcClassfile(String type, String source) throws IOException {
-    CompilationUnit srcUnit = compileType(type, source);
-    CompilationUnit classfileUnit = compileAsClassFile(type, source);
-    assertEqualASTs(srcUnit, classfileUnit);
+  protected String diff(String file1, String file2) {
+    File f1 = new File(tempDir, file1);
+    File f2 = new File(tempDir, file2);
+    ProcessBuilder pb = new ProcessBuilder("/usr/bin/diff",
+        f1.getAbsolutePath(), f2.getAbsolutePath()).inheritIO();
+    pb.redirectErrorStream(true);
+    File log = new File(tempDir, "result.diff");
+    pb.redirectOutput(ProcessBuilder.Redirect.to(log));
+    try {
+      Process p = pb.start();
+      p.waitFor();
+      String s = Files.asCharSource(log, options.fileUtil().getCharset()).read();
+      return s;
+    } catch (InterruptedException | IOException e) {
+      return "failed diffing generated files: " + e;
+    }
   }
 
   /**
@@ -525,6 +554,31 @@ public class GenerationTest extends TestCase {
   }
 
   /**
+   * Similar to the versions above, but it does not generate an in-memory file.
+   *
+   * @param inputFile the name of the file to be transpiled
+   * @param outputFile the name of the file whose contents should be returned,
+   *                   which is either the Obj-C header or implementation file
+   */
+  protected String translateSourceFileNoInMemory(String inputFile, String outputFile)
+      throws IOException {
+    Parser.Handler handler = (String path, CompilationUnit newUnit) -> {
+      try {
+        TranslationProcessor.applyMutations(
+            newUnit, deadCodeMap, options.externalAnnotations(), TimeTracker.noop());
+        generateFromUnit(newUnit, outputFile);
+      } catch (IOException e) {
+        // Ignore.
+      }
+    };
+    parser.parseFiles(Arrays.asList(inputFile), handler, null);
+    if (ErrorUtil.errorCount() > 0) {
+      failWithMessages("Compilation errors:", ErrorUtil.getErrorMessages());
+    }
+    return getTranslatedFile(outputFile);
+  }
+
+  /**
    * Compile Java source and translate the resulting class file, returning the
    * contents of either the generated header or implementation file.
    *
@@ -536,7 +590,8 @@ public class GenerationTest extends TestCase {
   protected String compileAndTranslateSourceFile(String source, String typeName, String fileName)
       throws IOException {
     CompilationUnit newUnit = compileAsClassFile(typeName, source);
-    TranslationProcessor.applyMutations(newUnit, deadCodeMap, TimeTracker.noop());
+    TranslationProcessor.applyMutations(
+        newUnit, deadCodeMap, options.externalAnnotations(), TimeTracker.noop());
     return generateFromUnit(newUnit, fileName);
   }
 
@@ -584,7 +639,7 @@ public class GenerationTest extends TestCase {
   protected String addSourceFile(String source, String fileName) throws IOException {
     File file = new File(tempDir, fileName);
     file.getParentFile().mkdirs();
-    Files.write(source, file, options.fileUtil().getCharset());
+    Files.asCharSink(file, options.fileUtil().getCharset()).write(source);
     return file.getPath();
   }
 
@@ -604,7 +659,7 @@ public class GenerationTest extends TestCase {
   protected String getTranslatedFile(String fileName) throws IOException {
     File f = new File(tempDir, fileName);
     assertTrue(fileName + " not generated", f.exists());
-    return Files.toString(f, options.fileUtil().getCharset());
+    return Files.asCharSource(f, options.fileUtil().getCharset()).read();
   }
 
   /**
@@ -708,6 +763,22 @@ public class GenerationTest extends TestCase {
     }
   }
 
+  protected String extractKytheMetadata(String translation) {
+    String openingDelimiter = "/* This file contains Kythe metadata.";
+    String closingDelimiter = "*/";
+    int openingDelimiterIndex = translation.indexOf(openingDelimiter);
+    int closingDelimiterIndex = translation.indexOf(closingDelimiter);
+    if (openingDelimiterIndex == -1) {
+      return "";
+    }
+
+    String encodedMetadata =
+        translation
+            .substring(openingDelimiterIndex + openingDelimiter.length(), closingDelimiterIndex)
+            .replace("\n", "")
+            .trim();
+    return new String(Base64.getDecoder().decode(encodedMetadata), UTF_8);
+  }
 
   // Empty test so Bazel won't report a "no tests" error.
   public void testNothing() {}

@@ -17,9 +17,7 @@ package com.google.j2objc;
 import junit.framework.Test;
 import junit.framework.TestSuite;
 
-/**
- * Tests that rely on the java.lang.reflect package.
- */
+/** Tests that rely on the java.lang.reflect package. */
 public class ReflectionTests {
 
   private static final Class<?>[] reflectionTests = {
@@ -29,18 +27,25 @@ public class ReflectionTests {
     com.google.j2objc.reflect.ProxyTest.class,
     java.lang.reflect.MethodTest.class,
     libcore.java.lang.CharacterTest.class,
-    libcore.java.lang.reflect.AnnotationsTest.class,
     libcore.java.lang.reflect.ArrayTest.class,
     libcore.java.lang.reflect.ConstructorTest.class,
     libcore.java.lang.reflect.FieldTest.class,
     libcore.java.lang.reflect.MethodTest.class,
     libcore.java.lang.reflect.ReflectionTest.class,
-    org.apache.harmony.luni.tests.java.lang.ClassTest.class,
+    libcore.java.lang.reflect.annotations.AnnotatedElementParameterTest.class,
+    libcore.java.lang.reflect.annotations.Annotations57649Test.class,
+    libcore.java.lang.reflect.annotations.AnnotationsTest.class,
+    libcore.java.lang.reflect.annotations.ClassTest.class,
+    libcore.java.lang.reflect.annotations.ConstructorTest.class,
+    libcore.java.lang.reflect.annotations.ExecutableParameterTest.class,
+    libcore.java.lang.reflect.annotations.FieldTest.class,
+    libcore.java.lang.reflect.annotations.MethodTest.class,
+    libcore.java.lang.reflect.annotations.PackageTest.class,
     org.apache.harmony.luni.tests.java.lang.reflect.ArrayTest.class,
     org.apache.harmony.luni.tests.java.lang.reflect.FieldTest.class,
     org.apache.harmony.luni.tests.java.lang.reflect.ModifierTest.class,
-    org.apache.harmony.luni.tests.java.lang.StringTest.class,
-    org.apache.harmony.luni.tests.java.util.ArraysTest.class,
+    org.apache.harmony.tests.java.lang.ClassTest.class,
+    org.apache.harmony.tests.java.lang.StringTest.class,
     org.apache.harmony.tests.java.lang.reflect.AccessibleObjectTest.class,
     org.apache.harmony.tests.java.lang.reflect.ArrayTest.class,
     org.apache.harmony.tests.java.lang.reflect.ConstructorTest.class,
@@ -54,6 +59,7 @@ public class ReflectionTests {
     org.apache.harmony.tests.java.lang.reflect.TypeVariableTest.class,
     org.apache.harmony.tests.java.lang.reflect.UndeclaredThrowableExceptionTest.class,
     org.apache.harmony.tests.java.lang.reflect.WildcardTypeTest.class,
+    org.apache.harmony.tests.java.util.ArraysTest.class,
     tests.api.java.lang.reflect.ProxyTest.class,
   };
 

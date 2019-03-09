@@ -22,7 +22,6 @@ import com.google.devtools.j2objc.ast.SingleMemberAnnotation;
 import com.google.devtools.j2objc.file.InputFile;
 import com.google.devtools.j2objc.file.RegularInputFile;
 import com.google.devtools.j2objc.util.ErrorUtil;
-import com.google.devtools.j2objc.util.FileUtil;
 import com.google.devtools.j2objc.util.Parser;
 import com.google.devtools.j2objc.util.TypeUtil;
 import com.google.j2objc.annotations.ObjectiveCName;
@@ -103,16 +102,15 @@ public class InputFilePreprocessor {
       String relativePath = qualifiedName.replace('.', File.separatorChar) + ".java";
       File strippedFile = new File(strippedDir, relativePath);
       Files.createParentDirs(strippedFile);
-      Files.write(parseResult.getSource(), strippedFile, options.fileUtil().getCharset());
+      Files.asCharSink(strippedFile, options.fileUtil().getCharset())
+          .write(parseResult.getSource());
       input.setFile(new RegularInputFile(strippedFile.getPath(), relativePath));
     }
   }
 
-  private void processPackageInfoSource(ProcessingContext input) throws IOException {
+  private void processPackageInfoSource(ProcessingContext input) {
     InputFile file = input.getFile();
-    String source = options.fileUtil().readFile(file);
-    CompilationUnit compilationUnit =
-        parser.parse(FileUtil.getMainTypeName(file), file.getUnitName(), source);
+    CompilationUnit compilationUnit = parser.parse(file);
     if (compilationUnit != null) {
       extractPackagePrefix(file, compilationUnit);
     }

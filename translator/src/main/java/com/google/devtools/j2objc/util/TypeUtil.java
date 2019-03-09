@@ -208,7 +208,15 @@ public final class TypeUtil {
   }
 
   public static TypeElement asTypeElement(TypeMirror t) {
-    return isDeclaredType(t) ? (TypeElement) ((DeclaredType) t).asElement() : null;
+    if (isDeclaredType(t)) {
+      return (TypeElement) ((DeclaredType) t).asElement();
+    }
+    // Return the left-most component of an intersection type, for compatibility with JDK 10 and
+    // earlier.
+    if (isIntersection(t)) {
+      return asTypeElement(((IntersectionType) t).getBounds().iterator().next());
+    }
+    return null;
   }
 
   public static boolean isJavaObject(TypeMirror t) {
@@ -251,11 +259,26 @@ public final class TypeUtil {
   }
 
   public boolean isAssignable(TypeMirror t1, TypeMirror t2) {
+    if (isGeneratedType(t1) || isGeneratedType(t2)) {
+      // TODO(user): implement as part of converting Elements to their generated versions.
+      return false;
+    }
     return javacTypes.isAssignable(t1, t2);
   }
 
   public boolean isSubtype(TypeMirror t1, TypeMirror t2) {
+    if (isGeneratedType(t1) || isGeneratedType(t2)) {
+      // TODO(user): implement as part of converting Elements to their generated versions.
+      return false;
+    }
     return javacTypes.isSubtype(t1, t2);
+  }
+
+  public boolean isSameType(TypeMirror t1, TypeMirror t2) {
+    if (isGeneratedType(t1) || isGeneratedType(t2)) {
+      return t1.equals(t2);
+    }
+    return javacTypes.isSameType(t1, t2);
   }
 
   public boolean isSubsignature(ExecutableType m1, ExecutableType m2) {
@@ -594,6 +617,22 @@ public final class TypeUtil {
     return javacTypes.getNullType();
   }
 
+  public TypeMirror resolvePrimitiveType(String signature) {
+    switch (signature) {
+      case "B": return getByte();
+      case "C": return getChar();
+      case "D": return getDouble();
+      case "F": return getFloat();
+      case "I": return getInt();
+      case "J": return getLong();
+      case "S": return getShort();
+      case "V": return getVoid();
+      case "Z": return getBoolean();
+      default:
+        return null;
+    }
+  }
+
   public PrimitiveType unboxedType(TypeMirror t) {
     if (isGeneratedType(t)) {
       return null;
@@ -729,6 +768,7 @@ public final class TypeUtil {
       case INT:
       case LONG:
       case SHORT:
+      case TYPEVAR:
       case VOID:
         return getName(t);
       default:
@@ -866,5 +906,10 @@ public final class TypeUtil {
 
   private static TypeElement newPrimitiveIosArray(String name) {
     return GeneratedTypeElement.newIosClass(name, NS_OBJECT, "IOSPrimitiveArray.h");
+  }
+
+  public static boolean isStubType(String typeName) {
+    // Currently only NSException and NSFastEnumeration have com.google.j2objc stubs.
+    return typeName.startsWith("com.google.j2objc.NS");
   }
 }

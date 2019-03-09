@@ -35,7 +35,10 @@ import com.google.j2objc.annotations.Property;
 import java.lang.reflect.Modifier;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;
 
@@ -97,6 +100,7 @@ public class TypeImplementationGenerator extends TypeGenerator {
 
     printOuterDeclarations();
     printTypeLiteralImplementation();
+    printNameMapping();
   }
 
   private void printInitFlagDefinition() {
@@ -180,13 +184,22 @@ public class TypeImplementationGenerator extends TypeGenerator {
         String varName = nameTable.getVariableQualifiedName(varElement);
         String objcType = nameTable.getObjCType(type);
         String typeSuffix = isPrimitive ? NameTable.capitalize(TypeUtil.getName(type)) : "Id";
-        if (isVolatile) {
-          printf("\n+ (%s)%s {\n  return JreLoadVolatile%s(&%s);\n}\n",
-                 objcType, accessorName, typeSuffix, varName);
-        } else {
-          printf("\n+ (%s)%s {\n  return %s;\n}\n", objcType, accessorName, varName);
+        TypeElement declaringClass = ElementUtil.getDeclaringClass(varElement);
+        String baseName = nameTable.getVariableBaseName(varElement);
+        ExecutableElement getter =
+            ElementUtil.findGetterMethod(baseName, type, declaringClass, /* isStatic = */ true);
+        if (getter == null) {
+          if (isVolatile) {
+            printf(
+                "\n+ (%s)%s {\n  return JreLoadVolatile%s(&%s);\n}\n",
+                objcType, accessorName, typeSuffix, varName);
+          } else {
+            printf("\n+ (%s)%s {\n  return %s;\n}\n", objcType, accessorName, varName);
+          }
         }
-        if (!ElementUtil.isFinal(varElement)) {
+        ExecutableElement setter =
+            ElementUtil.findSetterMethod(baseName, type, declaringClass, /* isStatic = */ true);
+        if (setter == null && !ElementUtil.isFinal(varElement)) {
           String setterFunc = isVolatile
               ? (isPrimitive ? "JreAssignVolatile" + typeSuffix : "JreVolatileStrongAssign")
               : (isPrimitive | options.useARC() ? null : "JreStrongAssign");
@@ -223,6 +236,16 @@ public class TypeImplementationGenerator extends TypeGenerator {
       newline();
       printf("J2OBJC_%s_TYPE_LITERAL_SOURCE(%s)\n",
           isInterfaceType() ? "INTERFACE" : "CLASS", typeName);
+    }
+  }
+
+  private void printNameMapping() {
+    if (!options.stripNameMapping()) {
+      Optional<String> mapping = nameTable.getNameMapping(typeElement, typeName);
+      if (mapping.isPresent()) {
+        newline();
+        printf(mapping.get());
+      }
     }
   }
 
@@ -348,5 +371,10 @@ public class TypeImplementationGenerator extends TypeGenerator {
 
   protected String generateStatement(Statement stmt) {
     return StatementGenerator.generate(stmt, getBuilder().getCurrentLine());
+  }
+
+  @Override
+  protected String nullability(Element element) {
+    return "";
   }
 }

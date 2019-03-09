@@ -76,7 +76,7 @@ public final class TranslationUtil {
     this.options = options;
     this.elementUtil = elementUtil;
     this.jreEmulLoader = getJreEmulClassPath(options);
-    
+
   }
 
   public static TypeElement getSuperType(AbstractTypeDeclaration node) {
@@ -120,6 +120,9 @@ public final class TranslationUtil {
     if (ElementUtil.isLambda(type)) {
       return false;
     }
+    if (isJUnitTestClass(type) || ElementUtil.isRuntimeAnnotation(type)) {
+      return true;
+    }
     PackageElement packageElement = ElementUtil.getPackage(type);
     ReflectionSupport.Level level = null;
     while (type != null) {
@@ -143,6 +146,24 @@ public final class TranslationUtil {
     }
   }
 
+  private boolean isJUnitTestClass(TypeElement type) {
+    if (ElementUtil.isPackageInfo(type)) {
+      return false;
+    }
+    return isJUnit3TestClass(type) || isJUnit4TestClass(type);
+  }
+
+  private boolean isJUnit3TestClass(TypeElement type) {
+    TypeElement testType = typeUtil.resolveJavaType("junit.framework.Test");
+    return testType != null && typeUtil.isAssignable(type.asType(), testType.asType());
+  }
+
+  private boolean isJUnit4TestClass(TypeElement type) {
+    AnnotationMirror annotation =
+        ElementUtil.getQualifiedNamedAnnotation(type, "org.junit.runner.RunWith");
+    return annotation != null;
+  }
+
   private ReflectionSupport.Level getReflectionSupportLevelOnPackage(PackageElement node) {
     ReflectionSupport.Level level = getReflectionSupportLevel(
         ElementUtil.getAnnotation(node, ReflectionSupport.class));
@@ -151,7 +172,7 @@ public final class TranslationUtil {
     }
     // Check if package-info.java contains ReflectionSupport annotation
     level = options.getPackageInfoLookup().getReflectionSupportLevel(
-        node.getSimpleName().toString());
+        node.getQualifiedName().toString());
     return level;
   }
 

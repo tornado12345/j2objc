@@ -26,6 +26,7 @@
 
 package java.net;
 
+import com.google.j2objc.annotations.ReflectionSupport;
 import com.google.j2objc.annotations.RetainedWith;
 import java.io.IOException;
 import java.io.InputStream;
@@ -50,7 +51,7 @@ abstract class AbstractPlainSocketImpl extends SocketImpl
     /* instance variable for SO_TIMEOUT */
     int timeout;   // timeout in millisec
     // traffic class
-    private int trafficClass;
+    int trafficClass;
 
     private boolean shut_rd = false;
     private boolean shut_wr = false;
@@ -650,6 +651,7 @@ abstract class AbstractPlainSocketImpl extends SocketImpl
     public final static int SHUT_WR = 1;
 }
 
+@ReflectionSupport(value = ReflectionSupport.Level.FULL)
 class InetAddressContainer {
     InetAddress addr;
 }
