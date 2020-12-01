@@ -43,6 +43,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import protos.ConflictingClassNameOuterClass.ConflictingClassName;
 import protos.EmptyFile;
 import protos.MsgWithDefaults;
 import protos.MsgWithDefaultsOrBuilder;
@@ -99,6 +100,11 @@ public class CompatibilityTest extends ProtobufTest {
   public void testObjcClassPrefix() throws Exception {
     @SuppressWarnings("unused")
     PrefixDummy2 dummy2 = PrefixDummy2.newBuilder().build();
+  }
+
+  public void testConflictingClassName() throws Exception {
+    @SuppressWarnings("unused")
+    ConflictingClassName dummy = ConflictingClassName.getDefaultInstance();
   }
 
   public void testSetAndGetInt() throws Exception {
@@ -1341,5 +1347,15 @@ public class CompatibilityTest extends ProtobufTest {
         0x7A, 0x0A, 0x61, 0x62, 0x63, 0xFF, 0xD8, 0xFF, 0xE0, 0x64, 0x65, 0x66 });
     TypicalData data = TypicalData.parseFrom(new ByteArrayInputStream(rawData));
     assertEquals("abc\ufffd\ufffd\ufffd\ufffddef", data.getMyString());
+  }
+
+  public void testDescriptorGetName() throws Exception {
+    Descriptor descriptor = TypicalData.Builder.getDescriptor();
+    assertTrue(descriptor.getName().endsWith("TypicalData"));
+  }
+
+  public void testDescriptorGetFullName() throws Exception {
+    Descriptor descriptor = TypicalData.Builder.getDescriptor();
+    assertTrue(descriptor.getFullName().endsWith("protos.TypicalData"));
   }
 }

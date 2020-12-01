@@ -20,8 +20,8 @@ JAVA_DEPS_JAR_DIR = $(J2OBJC_ROOT)/java_deps/$(BUILD_DIR_NAME)
 
 JUNIT_JAR = j2objc_junit.jar
 
-JUNIT_ROOT_JAR = junit-4.11.jar
-JUNIT_SOURCE_JAR = junit-4.11-sources.jar
+JUNIT_ROOT_JAR = junit-4.13.1.jar
+JUNIT_SOURCE_JAR = junit-4.13.1-sources.jar
 
 JUNIT_DATAPROVIDER_JAR = junit-dataprovider-1.10.4.jar
 JUNIT_DATAPROVIDER_SOURCE_JAR = junit-dataprovider-1.10.4-sources.jar
@@ -30,10 +30,7 @@ JUNIT_DATAPROVIDER_SOURCE_JAR = junit-dataprovider-1.10.4-sources.jar
 HAMCREST_JAR = hamcrest-core-1.3.jar
 HAMCREST_SOURCE_JAR = hamcrest-core-1.3-sources.jar
 
-MOCKITO_JAR = mockito-core-1.10.19.jar
-MOCKITO_SOURCE_JAR = mockito-core-1.10.19-sources.jar
-
-PROTOBUF_JAR = protobuf-java-3.5.1.jar
+PROTOBUF_JAR = protobuf-java-3.11.1.jar
 
 ERROR_PRONE_ANNOTATIONS_JAR = error_prone_annotations-2.1.3.jar
 ERROR_PRONE_ANNOTATIONS_SOURCE_JAR = error_prone_annotations-2.1.3-sources.jar
@@ -54,7 +51,10 @@ GUAVA_ANDROID_JAR = guava-25.1-android.jar
 GUAVA_ANDROID_SOURCE_JAR = guava-25.1-android-sources.jar
 
 SCENELIB_JAR = scenelib.jar
-PLUME_UTIL_JAR = plume-util-1.0.5.jar
+PLUME_UTIL_JAR = plume-util-1.0.6.jar
+
+MOCKITO_JAR = mockito-core-2.23.4.jar
+MOCKITO_SOURCE_JAR = mockito-core-2.23.4-sources.jar
 
 JSR305_JAR = jsr305-3.0.0.jar
 JSR305_SOURCE_JAR = jsr305-3.0.0.jar
@@ -67,6 +67,12 @@ JAVAC_JAR = tools.jar
 DOCLAVA_JAR = doclava-1.0.6.jar
 JSILVER_JAR = jsilver-1.0.0.jar
 
+PROCYON_COMPILERTOOLS_JAR = procyon-compilertools-0.5.32.jar
+NEW_PROCYON_COMPILERTOOLS_JAR = procyon-compilertools-0.5.33.jar
 PROCYON_JARS = \
     procyon-core-0.5.32.jar \
-    procyon-compilertools-0.5.32.jar
+    $(PROCYON_COMPILERTOOLS_JAR)
+
+# Flogger support
+FLOGGER_JAR = flogger-0.5.1.jar
+GOOGLE_EXTENSIONS_JAR = google-extensions-0.5.1.jar

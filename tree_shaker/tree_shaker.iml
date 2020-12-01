@@ -15,7 +15,8 @@
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/src/main/java" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/main/resources" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/src/test/java" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/test/java" isTestSource="true" />
+      <excludeFolder url="file://$MODULE_DIR$/build_result" />
     </content>
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="inheritedJdk" />
@@ -42,12 +43,10 @@
     <orderEntry type="module-library">
       <library name="javac.jar">
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/../java_deps/build_result/javac.jar!/" />
+          <root url="jar://$MODULE_DIR$/../java_deps/build_result/tools.jar!/" />
         </CLASSES>
         <JAVADOC />
-        <SOURCES>
-          <root url="file://../java_deps/build_result/javac-src.jar" />
-        </SOURCES>
+        <SOURCES />
       </library>
     </orderEntry>
   </component>

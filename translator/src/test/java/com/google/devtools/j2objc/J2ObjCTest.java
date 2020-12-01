@@ -14,8 +14,11 @@
 
 package com.google.devtools.j2objc;
 
+import com.google.devtools.j2objc.util.FileUtil;
 import com.google.devtools.j2objc.util.HeaderMap;
 import com.google.devtools.j2objc.util.SourceVersion;
+import com.google.devtools.j2objc.util.Version;
+import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -295,6 +298,13 @@ public class J2ObjCTest extends GenerationTest {
     assertWarningCount(1);
   }
 
+  // Test for error if jar doesn't contain a Java source file.
+  public void testJarNoJava() throws Exception {
+    String processorJarPath = getResourceAsFile("annotations/Processor.jar");
+    J2ObjC.run(Collections.singletonList(processorJarPath), options);
+    assertErrorCount(1);
+  }
+
   public void testSourcePathTypesIncludedInGlobalCombinedOutput() throws Exception {
     options.setGlobalCombinedOutput("combined_file");
     jarPath = getResourceAsFile("util/example.jar");
@@ -335,5 +345,41 @@ public class J2ObjCTest extends GenerationTest {
     translation = getTranslatedFile("foo/bar/module-info.m");
     assertTranslation(translation, "foo/bar/module-info.h");
     assertNotInTranslation(translation, "@implementation");
+  }
+
+  public void testHeaderOutputDirectory() throws IOException {
+    File headerOutputDir = FileUtil.createTempDir("testout-hdrs");
+    options.fileUtil().setHeaderOutputDirectory(headerOutputDir);
+    String srcPath = addSourceFile("package foo.bar; class Test {}", "foo/bar/Test.java");
+    J2ObjC.run(Collections.singletonList(srcPath), options);
+
+    // Just the generated header should be in the header output directory.
+    assertTrue(new File(headerOutputDir, "foo/bar/Test.h").exists());
+    assertFalse(new File(headerOutputDir, "foo/bar/Test.m").exists());
+
+    // Everything else is still in the regular output directory.
+    assertFalse(new File(tempDir, "foo/bar/Test.h").exists());
+    assertTrue(new File(tempDir, "foo/bar/Test.m").exists());
+    assertTrue(new File(tempDir, "foo/bar/Test.java").exists());
+  }
+
+  public void testJavacVersionString() {
+    assertTrue(Version.jarVersion(Options.class).contains("(javac "));
+  }
+
+  public void testClasspathWildcard() throws Exception {
+    // The package-info.class in the jar specifies to keep reflection for the package.
+    // This should take precedence over the strip-reflection option.
+    String jarFilePath = getResourceAsFile("util/packageInfoLookupTest.jar");
+    String wildcard = new File(jarFilePath).getParent() + "/*";
+    options.fileUtil().getClassPathEntries().clear();
+    options.load(new String[] {"--strip-reflection", "-classpath", wildcard});
+
+    String srcPath = addSourceFile(
+        "package com.google.test.packageInfoLookupTest; public class A {} ",
+        "com/google/test/packageInfoLookupTest/A.java");
+    J2ObjC.run(Collections.singletonList(srcPath), options);
+    String translation = getTranslatedFile("com/google/test/packageInfoLookupTest/A.m");
+    assertTranslation(translation, "__metadata");
   }
 }

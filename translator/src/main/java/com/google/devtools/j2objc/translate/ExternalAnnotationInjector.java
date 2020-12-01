@@ -15,16 +15,20 @@
 package com.google.devtools.j2objc.translate;
 
 import com.google.devtools.j2objc.ast.AbstractTypeDeclaration;
+import com.google.devtools.j2objc.ast.AnnotationTypeDeclaration;
+import com.google.devtools.j2objc.ast.BodyDeclaration;
 import com.google.devtools.j2objc.ast.CompilationUnit;
 import com.google.devtools.j2objc.ast.EnumDeclaration;
+import com.google.devtools.j2objc.ast.FieldDeclaration;
 import com.google.devtools.j2objc.ast.MethodDeclaration;
+import com.google.devtools.j2objc.ast.NormalAnnotation;
+import com.google.devtools.j2objc.ast.PackageDeclaration;
+import com.google.devtools.j2objc.ast.SimpleName;
 import com.google.devtools.j2objc.ast.TypeDeclaration;
 import com.google.devtools.j2objc.ast.UnitTreeVisitor;
 import com.google.devtools.j2objc.types.GeneratedAnnotationMirror;
 import com.google.devtools.j2objc.types.GeneratedAnnotationValue;
-import com.google.devtools.j2objc.types.GeneratedElement;
 import com.google.devtools.j2objc.types.GeneratedExecutableElement;
-import com.google.devtools.j2objc.types.GeneratedTypeElement;
 import com.google.devtools.j2objc.types.GeneratedVariableElement;
 import com.google.devtools.j2objc.util.ElementUtil;
 import com.google.devtools.j2objc.util.ErrorUtil;
@@ -36,18 +40,25 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import javax.lang.model.AnnotatedConstruct;
+import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.PackageElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeMirror;
 import scenelib.annotations.Annotation;
 import scenelib.annotations.el.AClass;
 import scenelib.annotations.el.AElement;
+import scenelib.annotations.el.AField;
 import scenelib.annotations.el.AMethod;
 import scenelib.annotations.el.AScene;
 import scenelib.annotations.field.AnnotationFieldType;
+import scenelib.annotations.field.BasicAFT;
 import scenelib.annotations.field.EnumAFT;
 
-/** Adds external annotations from an annotated AST to matching declarations in a J2ObjC AST. */
+/** Records external annotations from an annotated AST that match declarations in a J2ObjC AST. */
 public final class ExternalAnnotationInjector extends UnitTreeVisitor {
 
   // Contains the external annotations.
@@ -55,11 +66,27 @@ public final class ExternalAnnotationInjector extends UnitTreeVisitor {
 
   // While visiting the J2ObjC AST, the position in the annotated AST is maintained using this
   // stack.
-  Deque<Optional<AElement>> annotatedElementStack = new ArrayDeque<>();
+  private final Deque<Optional<AElement>> annotatedElementStack = new ArrayDeque<>();
 
   public ExternalAnnotationInjector(CompilationUnit unit, ExternalAnnotations externalAnnotations) {
     super(unit);
     this.annotatedAst = externalAnnotations.getScene();
+  }
+
+  @Override
+  public boolean visit(PackageDeclaration node) {
+    PackageElement element = node.getPackageElement();
+    String elementName = element.getQualifiedName() + ".package-info";
+    AClass annotatedElement = annotatedAst.classes.get(elementName);
+    if (annotatedElement != null) {
+      recordAnnotations(element, annotatedElement.tlAnnotationsHere);
+    }
+    return false;
+  }
+
+  @Override
+  public boolean visit(AnnotationTypeDeclaration node) {
+    return visitAbstractTypeDeclaration(node);
   }
 
   @Override
@@ -75,7 +102,7 @@ public final class ExternalAnnotationInjector extends UnitTreeVisitor {
   @Override
   public boolean visit(MethodDeclaration node) {
     if (!annotatedElementStack.peekLast().isPresent()) {
-      return false;
+      return true;
     }
     AClass annotatedParent = (AClass) annotatedElementStack.peekLast().get();
     ExecutableElement executable = node.getExecutableElement();
@@ -86,9 +113,29 @@ public final class ExternalAnnotationInjector extends UnitTreeVisitor {
       Set<Annotation> annotations = new LinkedHashSet<>();
       annotations.addAll(annotatedMethod.tlAnnotationsHere);
       annotations.addAll(annotatedMethod.returnType.tlAnnotationsHere);
-      injectAnnotationsToMethod(node, annotations);
+      recordAnnotations(node.getExecutableElement(), annotations);
+      injectAnnotationsToNode(node, annotations);
+    }
+    return true;
+  }
+
+  @Override
+  public boolean visit(FieldDeclaration node) {
+    if (!annotatedElementStack.peekLast().isPresent()) {
+      return false;
+    }
+    AClass annotatedParent = (AClass) annotatedElementStack.peekLast().get();
+    VariableElement element = node.getFragment().getVariableElement();
+    AField annotatedField = annotatedParent.fields.get(ElementUtil.getName(element));
+    if (annotatedField != null) {
+      recordAnnotations(element, annotatedField.tlAnnotationsHere);
     }
     return false;
+  }
+
+  @Override
+  public void endVisit(AnnotationTypeDeclaration node) {
+    endVisitAbstractTypeDeclaration();
   }
 
   @Override
@@ -105,7 +152,8 @@ public final class ExternalAnnotationInjector extends UnitTreeVisitor {
     String elementName = elementUtil.getBinaryName(node.getTypeElement());
     AClass annotatedElement = annotatedAst.classes.get(elementName);
     if (annotatedElement != null && !annotatedElement.tlAnnotationsHere.isEmpty()) {
-      injectAnnotationsToType(node, annotatedElement.tlAnnotationsHere);
+      recordAnnotations(node.getTypeElement(), annotatedElement.tlAnnotationsHere);
+      injectAnnotationsToNode(node, annotatedElement.tlAnnotationsHere);
     }
     annotatedElementStack.addLast(Optional.ofNullable(annotatedElement));
     return true;
@@ -115,46 +163,50 @@ public final class ExternalAnnotationInjector extends UnitTreeVisitor {
     annotatedElementStack.removeLast();
   }
 
-  private void injectAnnotationsToType(AbstractTypeDeclaration node, Set<Annotation> annotations) {
-    GeneratedTypeElement generatedElement = GeneratedTypeElement.mutableCopy(node.getTypeElement());
-    injectAnnotationsToElement(generatedElement, annotations);
-    node.setTypeElement(generatedElement);
-  }
-
-  private void injectAnnotationsToMethod(MethodDeclaration node, Set<Annotation> annotations) {
-    ExecutableElement element = node.getExecutableElement();
-    GeneratedExecutableElement generatedElement =
-        GeneratedExecutableElement.mutableCopy(nameTable.getMethodSelector(element), element);
-    injectAnnotationsToElement(generatedElement, annotations);
-    node.setExecutableElement(generatedElement);
-  }
-
-  private void injectAnnotationsToElement(GeneratedElement element, Set<Annotation> annotations) {
+  private void recordAnnotations(AnnotatedConstruct construct, Set<Annotation> annotations) {
     for (Annotation annotation : annotations) {
-      element.addAnnotationMirror(generateAnnotationMirror(annotation));
+      ExternalAnnotations.add(construct, generateAnnotationMirror(annotation));
+    }
+  }
+
+  private void injectAnnotationsToNode(BodyDeclaration declaration, Set<Annotation> annotations) {
+    for (Annotation annotation : annotations) {
+      NormalAnnotation newAnnotation = new NormalAnnotation();
+      AnnotationMirror annotationMirror = generateAnnotationMirror(annotation);
+      newAnnotation.setAnnotationMirror(annotationMirror);
+      newAnnotation.setTypeName(new SimpleName(annotationMirror.getAnnotationType().asElement()));
+      declaration.addAnnotation(newAnnotation);
     }
   }
 
   private GeneratedAnnotationMirror generateAnnotationMirror(Annotation annotation) {
-    GeneratedAnnotationMirror annotationMirror = new GeneratedAnnotationMirror(annotation.def.name);
+    DeclaredType type = (DeclaredType) typeUtil.resolveJavaType(annotation.def.name).asType();
+    GeneratedAnnotationMirror annotationMirror = new GeneratedAnnotationMirror(type);
     for (Map.Entry<String, Object> entry : annotation.fieldValues.entrySet()) {
       String fieldName = entry.getKey();
       // For our uses cases, the scenelib library encodes the annotation value as a string.
       String fieldValue = (String) entry.getValue();
       AnnotationFieldType fieldType = annotation.def.fieldTypes.get(fieldName);
-      AnnotationField field = generateAnnotationField(fieldType, fieldName, fieldValue);
+      AnnotationField field = generateAnnotationField(annotation, fieldType, fieldName, fieldValue);
       annotationMirror.addElementValue(field.element, field.value);
     }
     return annotationMirror;
   }
 
   private AnnotationField generateAnnotationField(
-      AnnotationFieldType type, String name, String value) {
+      Annotation annotation, AnnotationFieldType type, String name, String value) {
     AnnotationField field = new AnnotationField();
-    if (type instanceof EnumAFT) {
-      int index = value.lastIndexOf('.');
-      String enumTypeString = value.substring(0, index);
-      String enumValue = value.substring(index + 1);
+    if (type instanceof BasicAFT) {
+      Class<?> enclosedType = ((BasicAFT) type).type;
+      if (String.class.isAssignableFrom(enclosedType)) {
+        field.element = GeneratedExecutableElement
+            .newMethodWithSelector(name, typeUtil.getJavaString().asType(), null);
+        field.value = new GeneratedAnnotationValue(value);
+      } else {
+        ErrorUtil.error("ExternalAnnotationInjector: unsupported field type " + type);
+      }
+    } else if (type instanceof EnumAFT) {
+      String enumTypeString = annotation.def.name + "." + ((EnumAFT) type).typeName;
       TypeMirror enumType = typeUtil.resolveJavaType(enumTypeString).asType();
       field.element =
           GeneratedExecutableElement.newMethodWithSelector(
@@ -162,9 +214,9 @@ public final class ExternalAnnotationInjector extends UnitTreeVisitor {
       field.value =
           new GeneratedAnnotationValue(
               GeneratedVariableElement.newParameter(
-                  enumValue, enumType, /* enclosingElement = */ null));
+                  value, enumType, /* enclosingElement = */ null));
     } else {
-      ErrorUtil.error("Unsupported field type in external annotation: " + type);
+      ErrorUtil.error("ExternalAnnotationInjector: unsupported field type " + type);
     }
     return field;
   }

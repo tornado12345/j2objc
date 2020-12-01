@@ -43,6 +43,7 @@ import com.google.devtools.j2objc.translate.JavaToIOSMethodTranslator;
 import com.google.devtools.j2objc.translate.LabelRewriter;
 import com.google.devtools.j2objc.translate.LambdaRewriter;
 import com.google.devtools.j2objc.translate.LambdaTypeElementAdder;
+import com.google.devtools.j2objc.translate.LogSiteInjector;
 import com.google.devtools.j2objc.translate.MetadataWriter;
 import com.google.devtools.j2objc.translate.NilCheckResolver;
 import com.google.devtools.j2objc.translate.NumberMethodRewriter;
@@ -146,6 +147,12 @@ public class TranslationProcessor extends FileProcessor {
     if (deadCodeMap != null) {
       new DeadCodeEliminator(unit, deadCodeMap).run();
       ticker.tick("DeadCodeEliminator");
+    }
+
+    LogSiteInjector logSiteInjector = new LogSiteInjector(unit);
+    if (logSiteInjector.isEnabled()) {
+      logSiteInjector.run();
+      ticker.tick("CallSiteInjector");
     }
 
     new ExternalAnnotationInjector(unit, externalAnnotations).run();
@@ -325,8 +332,10 @@ public class TranslationProcessor extends FileProcessor {
     assert unit.isFullyParsed();
     TimeTracker ticker = TimeTracker.getTicker(unit.getSourceName(), unit.options().timingLevel());
     logger.fine("Generating " + unit.getOutputPath());
-    logger.finest("writing output file(s) to "
+    logger.finest("writing source file(s) to "
         + unit.options().fileUtil().getOutputDirectory().getAbsolutePath());
+    logger.finest("writing header file(s) to "
+        + unit.options().fileUtil().getHeaderOutputDirectory().getAbsolutePath());
     ticker.push();
 
     // write header

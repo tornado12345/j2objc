@@ -16,7 +16,6 @@
 #
 # Author: Tom Ball
 
-.SUFFIXES:
 .PHONY: clean
 
 include environment.mk
@@ -28,10 +27,12 @@ ALL_JAVA_SOURCES = $(JAVA_SOURCES) $(NO_TRANSLATE_JAVA_SOURCES)
 
 ANNOTATIONS_JAR = $(DIST_JAR_DIR)/j2objc_annotations.jar
 
-clean:
-	@rm -f $(EMULATION_JAR_DIST) $(EMULATION_SRC_JAR_DIST)
+MKTEMP_DIR = j2objc-jre_emul
 
-jars_dist: emul_jar_dist emul_src_jar_dist
+clean:
+	@rm -f $(EMULATION_JAR_DIST) $(EMULATION_SRC_JAR_DIST) $(JSON_JAR_DIST)
+
+jars_dist: emul_jar_dist emul_src_jar_dist json_jar_dist
 ifndef JAVA_8
 jars_dist: emul_module_dist
 endif
@@ -57,14 +58,6 @@ $(EMULATION_SRC_JAR_DIST): $(EMULATION_SRC_JAR)
 	@mkdir -p $(@D)
 	@install -m 0644 $< $@
 
-# The following test returns true on Linux or with GNU tools installed,
-# otherwise false on macOS which uses the BSD version.
-ifeq ($(shell mktemp --version >/dev/null 2>&1 && echo GNU || echo BSD), GNU)
-MKTEMP_CMD = mktemp -d --tmpdir j2objc-jre_emul.XXXXXX
-else
-MKTEMP_CMD = mktemp -d -t j2objc-jre_emul
-endif
-
 $(EMULATION_JAR): $(ALL_JAVA_SOURCES)
 	@mkdir -p $(@D)
 	@echo "building jre_emul.jar"
@@ -83,11 +76,11 @@ $(EMULATION_MODULE): $(EMULATION_JAR)
 	@../scripts/gen_module_info.py --name java.base --root $(BUILD_DIR)/jre_emul \
 	  --output $(BUILD_DIR)/module-info.java
 	@$(JAVAC) --system=none --patch-module=java.base=$(EMULATION_JAR) \
-	  -d $(BUILD_DIR) $(BUILD_DIR)/module-info.java
-	@jar uf $(EMULATION_JAR) -C $(BUILD_DIR) module-info.class
+	  -d $(BUILD_DIR)/jre_emul $(BUILD_DIR)/module-info.java
 	@mkdir $(BUILD_DIR)/jmod
-	@$(JAVA_HOME)/bin/jmod create --module-version 11 --target-platform osx \
-	  --class-path $(EMULATION_JAR) $(BUILD_DIR)/jmod/jre_emul.jmod
+	@$(JAVA_HOME)/bin/jmod create --module-version $(JAVA_VERSION) \
+	  --target-platform osx --class-path $(BUILD_DIR)/jre_emul \
+	  $(BUILD_DIR)/jmod/jre_emul.jmod
 	@$(JAVA_HOME)/bin/jlink --module-path $(BUILD_DIR)/jmod \
 	  --add-modules java.base  --output $(EMULATION_MODULE)
 	@cp $(JAVA_HOME)/lib/jrt-fs.jar $(EMULATION_MODULE)/lib/
@@ -110,6 +103,23 @@ $(JAVA_SOURCES_MANIFEST): $(ALL_JAVA_SOURCES)
 java_sources_manifest: $(JAVA_SOURCES_MANIFEST)
 	@:
 
-find_cycles: cycle_finder_dist $(JAVA_SOURCES_MANIFEST)
-	$(DIST_DIR)/cycle_finder -source 1.8 -w cycle_whitelist.txt -s $(JAVA_SOURCES_MANIFEST)
+json_jar_dist: $(JSON_JAR_DIST)
+	@:
 
+$(JSON_JAR_DIST): $(JSON_JAR)
+	@mkdir -p $(@D)
+	@install -m 0644 $< $@
+
+$(JSON_JAR): $(JSON_PUBLIC_SOURCES) $(JSON_PRIVATE_SOURCES) $(JSON_SOURCE_RETENTION_ANNOTATIONS)
+	@mkdir -p $(@D)
+	@echo "building json.jar"
+	@set -e; stage_dir=`${MKTEMP_CMD}`; \
+	  ../scripts/javac_no_deprecated_warnings.sh $(JAVAC) \
+	  -d $$stage_dir -encoding UTF-8 -source 1.8 -target 1.8 -nowarn $^; \
+	jar cf $(JSON_JAR) -C $$stage_dir .; \
+	rm -rf $$stage_dir
+
+find_cycles: cycle_finder_dist $(JAVA_SOURCES_MANIFEST)
+	$(DIST_DIR)/cycle_finder --patch-module java.base=$(JRE_SRC) \
+	  --suppress-list cycle_suppress_list.txt -s $(JAVA_SOURCES_MANIFEST) \
+	  -external-annotation-file $(J2OBJC_ANNOTATIONS)

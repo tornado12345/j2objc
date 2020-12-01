@@ -844,7 +844,8 @@ public class TreeConverter {
     if (ElementUtil.isConstant((VariableElement) element)
         && ElementUtil.isStatic(element)
         && !(selected.getKind() == Kind.METHOD_INVOCATION)
-        && !(selected.getKind() == Kind.MEMBER_SELECT)) {
+        && !(selected.getKind() == Kind.MEMBER_SELECT)
+        && !(selected.getKind() == Kind.PARENTHESIZED)) {
       return new QualifiedName()
           .setName(convertSimpleName(element, typeMirror, pos))
           .setQualifier((Name) convert(selected, path))
@@ -1275,7 +1276,11 @@ public class TreeConverter {
     TreePath path = getTreePath(parent, node);
     TryStatement newNode = new TryStatement();
     for (Tree obj : node.getResources()) {
-      newNode.addResource(convertVariableExpression((VariableTree) obj, path));
+      if (obj.getKind() == Kind.VARIABLE) {
+        newNode.addResource(convertVariableExpression((VariableTree) obj, path));
+      } else {
+        newNode.addResource(convertInner(obj, path));
+      }
     }
     for (CatchTree obj : node.getCatches()) {
       newNode.addCatchClause((CatchClause) convert(obj, path));

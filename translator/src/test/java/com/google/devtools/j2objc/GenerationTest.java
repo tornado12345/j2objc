@@ -44,6 +44,7 @@ import com.google.devtools.j2objc.util.ErrorUtil;
 import com.google.devtools.j2objc.util.FileUtil;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.Parser;
+import com.google.devtools.j2objc.util.SourceVersion;
 import com.google.devtools.j2objc.util.TimeTracker;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -63,6 +64,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Optional;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.regex.Matcher;
@@ -96,6 +98,9 @@ public class GenerationTest extends TestCase {
   @Override
   protected void setUp() throws IOException {
     tempDir = FileUtil.createTempDir("testout");
+    if (onJava9OrAbove()) {
+      SourceVersion.setMaxSupportedVersion(SourceVersion.JAVA_11);
+    }
     loadOptions();
     createParser();
   }
@@ -757,6 +762,25 @@ public class GenerationTest extends TestCase {
   protected boolean onJava9OrAbove() {
     try {
       Class.forName("java.lang.Module");
+      return true;
+    } catch (ClassNotFoundException e) {
+      return false;
+    }
+  }
+
+  protected boolean onJava10OrAbove() {
+    try {
+      // orElseThrow(Supplier) is in Java 8, orElseThrow() is new to Java 10.
+      Optional.class.getMethod("orElseThrow");
+      return true;
+    } catch (NoSuchMethodException e) {
+      return false;
+    }
+  }
+
+  protected boolean onJava11OrAbove() {
+    try {
+      Class.forName("java.net.http.HttpClient");
       return true;
     } catch (ClassNotFoundException e) {
       return false;

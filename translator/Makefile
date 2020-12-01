@@ -16,8 +16,6 @@
 #
 # Author: Tom Ball, Keith Stanger
 
-SUFFIXES:
-
 CWD = .
 SOURCE_DIR = src/main
 JAVA_SOURCE_DIR = $(SOURCE_DIR)/java
@@ -43,9 +41,12 @@ endif
 JAR_DEPS_DIST = $(DIST_DEPS:%=$(DIST_JAR_DIR)/%) $(INTERNAL_DEPS:%=$(JAVA_DEPS_JAR_DIR)/%)
 JAR_DEPS_PATH = $(subst $(eval) ,:,$(strip $(JAR_DEPS_DIST)))
 JUNIT_JAR_DIST = $(DIST_JAR_DIR)/$(JUNIT_JAR)
+FLOGGER_JARS = \
+  $(JAVA_DEPS_JAR_DIR)/$(FLOGGER_JAR):$(JAVA_DEPS_JAR_DIR)/$(GOOGLE_EXTENSIONS_JAR)
 
 CLASSPATH = $(CLASS_DIR):$(JAR_DEPS_PATH)
-TEST_CLASSPATH = $(TEST_DIR):$(CLASS_DIR):$(JAR_DEPS_PATH):$(JUNIT_JAR_DIST)
+TEST_CLASSPATH = \
+  $(TEST_DIR):$(CLASS_DIR):$(JAR_DEPS_PATH):$(JUNIT_JAR_DIST):$(FLOGGER_JARS)
 TEST_BOOT_CLASSPATH = $(DIST_JAR_DIR)/jre_emul.jar
 
 MAIN_CLASS = com.google.devtools.j2objc.J2ObjC
@@ -90,7 +91,6 @@ JAVA_SOURCES = \
 	ast/CreationReference.java \
 	ast/DebugASTDump.java \
 	ast/DebugASTPrinter.java \
-	ast/Dimension.java \
 	ast/DoStatement.java \
 	ast/EmptyStatement.java \
 	ast/EnhancedForStatement.java \
@@ -120,7 +120,6 @@ JAVA_SOURCES = \
 	ast/MethodInvocation.java \
 	ast/MethodReference.java \
 	ast/Name.java \
-	ast/NameQualifiedType.java \
 	ast/NativeDeclaration.java \
 	ast/NativeExpression.java \
 	ast/NativeStatement.java \
@@ -224,6 +223,7 @@ JAVA_SOURCES = \
 	translate/JavaCloneWriter.java \
 	translate/JavaToIOSMethodTranslator.java \
 	translate/LabelRewriter.java \
+	translate/LogSiteInjector.java \
 	translate/MetadataWriter.java \
 	translate/LambdaTypeElementAdder.java \
 	translate/LambdaRewriter.java \
@@ -317,29 +317,12 @@ default: $(J2OBJC_JAR)
 $(J2OBJC_JAR): $(MANIFEST) $(RESOURCE_FILES) $(JAVA_SOURCES_FULL) \
   | $(BUILD_DIR) java_deps_dist annotations_dist
 	@echo building j2objc jar
-ifdef JAVA_8
-	@$(JAVAC) -Xlint:unchecked -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) \
-	    -d $(CLASS_DIR) -encoding UTF-8 -source 1.8 -target 1.8 -nowarn \
-	    $(JAVA_SOURCES_FULL)
-else
-	@$(JAVAC) -Xlint:unchecked -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) \
-	    -d $(CLASS_DIR) -encoding UTF-8 -nowarn \
-	    --add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED \
-	    --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED \
-	    --add-exports jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED \
-	    --add-exports jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED \
-	    --add-exports jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED \
-	    $(JAVA_SOURCES_FULL)
-endif
+	@$(JAVAC) -sourcepath $(SOURCEPATH) -classpath $(CLASSPATH) -d $(CLASS_DIR) \
+	    $(TRANSLATOR_BUILD_FLAGS) $(JAVA_SOURCES_FULL)
 	@for lib in $(JAR_DEPS_DIST); do unzip -oq $$lib -d $(CLASS_DIR); done
 	@$(PRUNE_CMD)
-ifdef JAVA_8
 	@jar cfm $@-combined $(MANIFEST) -C $(CLASS_DIR) .
 	@$(JAVA) -jar $(JAVA_DEPS_JAR_DIR)/$(JARJAR_JAR) process jarjar.rules $@-combined $@
-else
-	# TODO(user): update jarjar to work with Java 11 bytecode.
-	@jar cfm $@ $(MANIFEST) -C $(CLASS_DIR) .
-endif
 
 # Format manifest classpath with each jar on a separate line, to avoid
 # maximum line length of 72 bytes in UTF-8 encoding.
@@ -371,18 +354,17 @@ dist: $(J2OBJC_JAR_DIST) $(J2OBJC_SH_DIST)
 clean:
 	@rm -rf $(BUILD_DIR) $(J2OBJC_JAR_DIST) $(J2OBJC_SH_DIST)
 
+COMMON_TEST_FLAGS = \
+  -classpath $(TEST_CLASSPATH):$(TEST_BOOT_CLASSPATH) \
+  -Xss4m -XX:+UseParallelGC \
+  -ea junit.textui.TestRunner
+
 test: compile-tests copy-test-resources
-ifdef JAVA_8
-	$(JAVA) -classpath $(TEST_CLASSPATH) -Xss4m -XX:+UseParallelGC \
-	    -Xbootclasspath/a:$(TEST_BOOT_CLASSPATH) \
-	    -ea junit.textui.TestRunner com.google.devtools.j2objc.SmallTests
-else
-	# TODO(user): move bootclasspath to --system=bootclasspath
-	# once jre_emul.jar is modularized.
-	$(JAVA) -classpath $(TEST_CLASSPATH):$(TEST_BOOT_CLASSPATH) \
-	    -Xss4m -XX:+UseParallelGC \
-	    -ea junit.textui.TestRunner com.google.devtools.j2objc.SmallTests
-endif
+	$(JAVA) $(COMMON_TEST_FLAGS) com.google.devtools.j2objc.SmallTests
+
+regression-test: compile-tests copy-test-resources
+	$(JAVA) -Dj2objcc.path=$(ARCH_BIN_DIR)/j2objcc $(COMMON_TEST_FLAGS) \
+	    com.google.devtools.j2objc.regression.LambdaExpressionsTest
 
 compile-tests: $(J2OBJC_JAR)
 	@mkdir -p $(TEST_DIR)

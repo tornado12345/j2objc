@@ -358,9 +358,9 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
   public void testNativeSuperInterfaceTranslation() throws IOException {
     if (onJava9OrAbove()) {
       // Allow overwriting the system java.lang.Iterable with our own.
-      options.addExtraJavacParserFlags("--patch-module", "java.base=" + tempDir);
+      options.addPlatformModuleSystemOptions("--patch-module", "java.base=" + tempDir);
       // Allow java.base to see com.google.j2objc.
-      options.addExtraJavacParserFlags("--add-reads", "java.base=ALL-UNNAMED");
+      options.addPlatformModuleSystemOptions("--add-reads", "java.base=ALL-UNNAMED");
     }
     // Translate the file in the temp directory (i.e. avoid in-memory copy) because the temp
     // directory is already configured as a patch-module location.
@@ -689,7 +689,7 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
         + "}";
     String translation = translateSourceFile(sourceContent, "FooBar", "FooBar.m");
     assertTranslatedLines(translation,
-        "__unsafe_unretained FooBar_Internal *fieldBar_;",
+        "WEAK_ FooBar_Internal *fieldBar_;",
         "FooBar_Internal *fieldFoo_;");
   }
 
@@ -769,9 +769,9 @@ public class ObjectiveCHeaderGeneratorTest extends GenerationTest {
         + " void foo() {}"
         + " @WeakOuter public class Inner { void bar() { foo(); } }"
         + " @Weak public Object obj; }", "Test", "Test.h");
-    assertTranslation(translation, "__unsafe_unretained id obj_;");
+    assertTranslation(translation, "WEAK_ id obj_;");
     translation = getTranslatedFile("Test.m");
-    assertTranslation(translation, "__unsafe_unretained Test *this$0_;");
+    assertTranslation(translation, "WEAK_ Test *this$0_;");
   }
 
   public void testReservedWordAsAnnotationPropertyName() throws IOException {

@@ -42,6 +42,7 @@ import com.google.devtools.j2objc.ast.SingleVariableDeclaration;
 import com.google.devtools.j2objc.ast.Statement;
 import com.google.devtools.j2objc.ast.ThrowStatement;
 import com.google.devtools.j2objc.ast.TreeNode;
+import com.google.devtools.j2objc.ast.TreeNode.Kind;
 import com.google.devtools.j2objc.ast.TreeUtil;
 import com.google.devtools.j2objc.ast.TryStatement;
 import com.google.devtools.j2objc.ast.Type;
@@ -244,28 +245,17 @@ public class Rewriter extends UnitTreeVisitor {
     TypeMirror fieldType = field.getTypeMirror();
     String getter = node.getGetter();
     String setter = node.getSetter();
-    if (field.getFragments().size() > 1) {
-      if (getter != null) {
-        ErrorUtil.error(field, "@Property getter declared for multiple fields");
-        return;
+    // Check that specified accessors exist.
+    TypeElement enclosingType = TreeUtil.getEnclosingTypeElement(node);
+    if (getter != null) {
+      if (ElementUtil.findMethod(enclosingType, getter) == null) {
+        ErrorUtil.error(field, "Non-existent getter specified: " + getter);
       }
-      if (setter != null) {
-        ErrorUtil.error(field, "@Property setter declared for multiple fields");
-        return;
-      }
-    } else {
-      // Check that specified accessors exist.
-      TypeElement enclosingType = TreeUtil.getEnclosingTypeElement(node);
-      if (getter != null) {
-        if (ElementUtil.findMethod(enclosingType, getter) == null) {
-          ErrorUtil.error(field, "Non-existent getter specified: " + getter);
-        }
-      }
-      if (setter != null) {
-        if (ElementUtil.findMethod(
-            enclosingType, setter, TypeUtil.getQualifiedName(fieldType)) == null) {
-          ErrorUtil.error(field, "Non-existent setter specified: " + setter);
-        }
+    }
+    if (setter != null) {
+      if (ElementUtil.findMethod(
+          enclosingType, setter, TypeUtil.getQualifiedName(fieldType)) == null) {
+        ErrorUtil.error(field, "Non-existent setter specified: " + setter);
       }
     }
   }
@@ -293,8 +283,7 @@ public class Rewriter extends UnitTreeVisitor {
 
   @Override
   public void endVisit(PackageDeclaration node) {
-    String pkgName = node.getName().toString();
-    if (options.getPackageInfoLookup().hasParametersAreNonnullByDefault(pkgName)) {
+    if (elementUtil.areParametersNonnullByDefault(node.getPackageElement(), options)) {
       unit.setHasNullabilityAnnotations();
     }
   }
@@ -304,7 +293,7 @@ public class Rewriter extends UnitTreeVisitor {
     // This visit rewrites try-with-resources constructs into regular try statements according to
     // JLS 14.20.3. The rewriting is done in a visit instead of endVisit because the mutations may
     // result in more try-with-resources constructs that need to be rewritten recursively.
-    List<VariableDeclarationExpression> resources = node.getResources();
+    List<TreeNode> resources = node.getResources();
     if (resources.isEmpty()) {
       return true;
     }
@@ -324,10 +313,19 @@ public class Rewriter extends UnitTreeVisitor {
     VariableElement primaryException = GeneratedVariableElement.newLocalVar(
         "__primaryException" + resources.size(), throwableType, null);
 
-    List<VariableDeclarationFragment> resourceFrags = resources.remove(0).getFragments();
-    assert resourceFrags.size() == 1;
-    VariableDeclarationFragment resourceFrag = resourceFrags.get(0);
-    VariableElement resourceVar = resourceFrag.getVariableElement();
+    TreeNode resource = resources.remove(0);
+    VariableElement resourceVar = null;
+    VariableDeclarationFragment resourceFrag = null;
+    if (resource.getKind() == Kind.VARIABLE_DECLARATION_EXPRESSION) {
+      List<VariableDeclarationFragment> resourceFrags =
+          ((VariableDeclarationExpression) resource).getFragments();
+      assert resourceFrags.size() == 1;
+      resourceFrag = resourceFrags.get(0);
+      resourceVar = resourceFrag.getVariableElement();
+    } else {
+      resourceVar = TreeUtil.getVariableElement((Expression) resource);
+    }
+    assert resourceVar != null;
 
     DeclaredType closeableType =
         typeUtil.findSupertype(resourceVar.asType(), "java.lang.AutoCloseable");
@@ -336,9 +334,10 @@ public class Rewriter extends UnitTreeVisitor {
         typeUtil.findMethod(throwableType, "addSuppressed", "java.lang.Throwable");
 
     Block block = new Block();
-    block.addStatement(new VariableDeclarationStatement(
-        resourceVar, TreeUtil.remove(resourceFrag.getInitializer())));
-
+    if (resourceFrag != null) {
+      block.addStatement(new VariableDeclarationStatement(
+          resourceVar, TreeUtil.remove(resourceFrag.getInitializer())));
+    }
     block.addStatement(new VariableDeclarationStatement(
         primaryException, new NullLiteral(typeUtil.getNull())));
 

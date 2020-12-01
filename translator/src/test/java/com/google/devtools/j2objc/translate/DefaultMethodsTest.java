@@ -62,6 +62,26 @@ public class DefaultMethodsTest extends GenerationTest {
     assertTranslation(translation, "return Foo_fWithInt_(self, y) + 1;");
   }
 
+  public void testSuperMethodReferenceToDefaultMethod() throws IOException {
+    String translation = translateSourceFile(
+        "import java.util.function.BooleanSupplier; "
+            + "interface I { "
+            + "  default boolean foo() { "
+            + "    return true; "
+            + "  } "
+            + "} "
+            + "public class Test implements I { "
+            + "  BooleanSupplier f() { "
+            + "    return I.super::foo; "
+            + "  } "
+            + "}", "Test", "Test.m");
+
+    assertTranslatedLines(translation,
+        "- (id<JavaUtilFunctionBooleanSupplier>)f {",
+        "  return create_Test_$Lambda$1_initWithTest_(self);",
+        "}");
+  }
+
   public void testBasicDefaultMethodUsage() throws IOException {
     String source = "  interface A {"
         + "  default void f() {}"
@@ -422,5 +442,29 @@ public class DefaultMethodsTest extends GenerationTest {
         "- (void)fooWithD:(B *)arg0 {",
         "  [self fooWithB:arg0];",
         "}");
+  }
+
+  public void testPrivateInterfaceMethod() throws IOException {
+    if (!onJava9OrAbove()) {
+      return;
+    }
+    String translation = translateSourceFile(
+        "public interface Test { "
+            + "  String name(); "
+            + "  default boolean isPalindrome() { "
+            + "    return name().equals(reverse(name())); "
+            + "  } "
+            + "  default boolean isPalindromeIgnoreCase() { "
+            + "    return name().equalsIgnoreCase(reverse(name())); "
+            + "  } "
+            + "  private String reverse(String s) { "
+            + "    return new StringBuilder(s).reverse().toString(); "
+            + " } "
+            + "}",
+        "Test", "Test.m");
+    assertTranslation(translation,
+        "NSString *Test_reverseWithNSString_(id<Test> self, NSString *s) {");
+    assertOccurrences(translation, "Test_reverseWithNSString_(self, [self name])", 2);
+    assertNotInTranslation(translation, "- (NSString *)reverseWithNSString:(NSString *)s {");
   }
 }
